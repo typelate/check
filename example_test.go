@@ -17,7 +17,7 @@ type Person struct {
 	Name string
 }
 
-func ExampleParseTree() {
+func ExampleExecute() {
 	// 1. Load Go packages with type info.
 	fset := token.NewFileSet()
 	pkgs, err := packages.Load(&packages.Config{
