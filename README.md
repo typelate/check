@@ -1,7 +1,6 @@
 # Check
 
-**Check** is a Go library for statically type-checking `text/template` and `html/template`.  
-It helps catch template/type mismatches early, making refactoring safer when changing types or templates.
+**Check** is a Go library for statically type-checking `text/template` and `html/template`. It helps catch template/type mismatches early, making refactoring safer when changing types or templates.
 
 To use it, call `Execute` and provide:
 - a `types.Type` for the template’s data (`.`), and
@@ -9,12 +8,8 @@ To use it, call `Execute` and provide:
 
 See [example_test.go](./example_test.go) for a working example.
 
-Originally built as part of [`muxt`](https://github.com/crhntr/muxt),  
-this package also powers the `muxt check` CLI command.  
-If you only need command-line checks, use `muxt check` directly.  
-
-Unlike `muxt`, which requires templates to be defined as global variables,  
-this package lets you map templates to data parameters more flexibly (at the cost of some verbosity).
+Originally built as part of [`muxt`](https://github.com/crhntr/muxt), this package also powers the `muxt check` CLI command. If you only need command-line checks, use `muxt check` directly.
+Unlike `muxt`, which requires templates to be defined as global variables, this package lets you map templates to data parameters more flexibly (at the cost of some verbosity).
 
 For a simpler, easier-to-configure alternative, consider [jba/templatecheck](https://github.com/jba/templatecheck).
 
