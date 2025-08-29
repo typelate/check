@@ -1,31 +1,19 @@
 # Check
 
-**Check** is a Go library for statically type-checking Go `text/template` and `html/template` usage.  
-It analyzes template parse trees against Go types using the standard `go/types` package.
+**Check** is a Go library for statically type-checking `text/template` and `html/template`.  
+It helps catch template/type mismatches early, making refactoring safer when changing types or templates.
 
-The library was originally developed as addon feature for for [`muxt`](https://github.com/crhntr/muxt),
-a CLI tool for generating HTTP handler functions from HTML templates.
-The check package is encapsulated in the `muxt check` command.
-Consider using `muxt check` directly.
+To use it, provide:
+- a `types.Type` for the template’s data (`.`), and
+- the template’s `parse.Tree`.
 
-> **Note:** The API may change in future releases. No guarantees of long-term stability are provided.
+See [example_test.go](./example_test.go) for a working example.
 
-## Overview
+Originally built as part of [`muxt`](https://github.com/crhntr/muxt),  
+the package also powers the `muxt check` CLI command.  
+If you just want command-line checks, consider using `muxt check` directly.
 
-Check works by walking a template’s parse tree and validating expressions against Go types.  
-It requires:
-- A `types.Type` that represents the data bound to `{{.}}` in the template.
-- A `TreeFinder` to resolve named templates.
-- A `CallChecker` to handle function calls (a default `Functions` type is provided).
-- A `*types.Package` and `*token.FileSet` for type context.
-
-The main entry point is:
-
-```go
-func ParseTree(global *Global, tree *parse.Tree, data types.Type) error
-````
-
-## Key Types
+## Key Types and Functions
 
 * **`Global`**
   Holds type and template resolution state. Constructed with `NewGlobal`.
