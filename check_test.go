@@ -791,7 +791,7 @@ func TestTree(t *testing.T) {
 				return ts.Tree, true
 			}), sourceFunctions)
 
-			if checkErr := check.ParseTree(global, templates.Tree, dataType); tt.Error != nil {
+			if checkErr := check.Execute(global, templates.Tree, dataType); tt.Error != nil {
 				execErr := templates.Execute(io.Discard, tt.Data)
 				tt.Error(t, checkErr, execErr, dataType)
 			} else {
@@ -811,7 +811,7 @@ func TestTree(t *testing.T) {
 
 		tm := template.Must(template.New("").Parse(`{{.Foo}}`))
 		global := check.NewGlobal(testPkg.Types, testPkg.Fset, nil, nil)
-		require.NoError(t, check.ParseTree(global, tm.Tree, fooer))
+		require.NoError(t, check.Execute(global, tm.Tree, fooer))
 	})
 	t.Run("field on parenthesized interface", func(t *testing.T) {
 		tp := testPkg.Types.Scope().Lookup("Fooer").Type()
@@ -822,7 +822,7 @@ func TestTree(t *testing.T) {
 
 		templ := template.Must(template.New("").Parse(`{{.Foo}}`))
 		global := check.NewGlobal(testPkg.Types, testPkg.Fset, nil, nil)
-		require.NoError(t, check.ParseTree(global, templ.Tree, fooer))
+		require.NoError(t, check.Execute(global, templ.Tree, fooer))
 	})
 }
 

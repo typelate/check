@@ -3,7 +3,7 @@
 **Check** is a Go library for statically type-checking `text/template` and `html/template`.  
 It helps catch template/type mismatches early, making refactoring safer when changing types or templates.
 
-To use it, call `ParseTree` and provide:
+To use it, call `Execute` and provide:
 - a `types.Type` for the template’s data (`.`), and
 - the template’s `parse.Tree`.
 
@@ -18,7 +18,7 @@ If you just want command-line checks, consider using `muxt check` directly.
 * **`Global`**
   Holds type and template resolution state. Constructed with `NewGlobal`.
 
-* **`ParseTree`**
+* **`Execute`**
   Entry point to validate a template tree against a given `types.Type`.
 
 * **`TreeFinder` / `FindTreeFunc`**
@@ -45,4 +45,6 @@ If you just want command-line checks, consider using `muxt check` directly.
    Compatibility with specialized template libraries (e.g. [safehtml](https://pkg.go.dev/github.com/google/safehtml)) has not been fully tested.
 
 4. **Runtime-only errors**
-   ParseTree checks static type consistency but cannot detect runtime conditions such as out-of-range indexes.
+   `Execute` checks static type consistency but cannot detect runtime conditions such as out-of-range indexes.
+   The standard library will try to dereference boxed types that may contain any type.
+   Errors introduced by changes on a boxed type can not be caught by this package.  

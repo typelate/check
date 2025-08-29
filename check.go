@@ -47,7 +47,7 @@ type CallChecker interface {
 
 type TypeNodeMapping map[types.Type][]parse.Node
 
-func ParseTree(global *Global, tree *parse.Tree, data types.Type) error {
+func Execute(global *Global, tree *parse.Tree, data types.Type) error {
 	s := &scope{
 		global: global,
 		variables: map[string]types.Type{

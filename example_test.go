@@ -80,7 +80,7 @@ func ExampleParseTree() {
 	// 7. Type-check the template.
 	{
 		const templateName = "unknown field"
-		if err := check.ParseTree(global, tmpl.Lookup("unknown field").Tree, personObj.Type()); err != nil {
+		if err := check.Execute(global, tmpl.Lookup("unknown field").Tree, personObj.Type()); err != nil {
 			fmt.Printf("template %q type error: %v\n", templateName, err)
 		} else {
 			fmt.Printf("template %q type-check passed\n", templateName)
@@ -88,7 +88,7 @@ func ExampleParseTree() {
 	}
 	{
 		const templateName = "known field"
-		if err := check.ParseTree(global, tmpl.Lookup("known field").Tree, personObj.Type()); err != nil {
+		if err := check.Execute(global, tmpl.Lookup("known field").Tree, personObj.Type()); err != nil {
 			fmt.Printf("template %q type error: %v\n", templateName, err)
 		} else {
 			fmt.Printf("template %q type-check passed\n", templateName)

@@ -571,7 +571,7 @@ func TestExec(t *testing.T) {
 
 			global := check.NewGlobal(testPkg.Types, testPkg.Fset, findTextTree(tmpl), MortalFunctions(funcSource))
 
-			checkErr := check.ParseTree(global, tmpl.Tree, dataType)
+			checkErr := check.Execute(global, tmpl.Tree, dataType)
 			switch {
 			case !tt.ok && checkErr == nil:
 				t.Logf("exec error: %s", execErr)
