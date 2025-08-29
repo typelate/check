@@ -3,7 +3,7 @@
 **Check** is a Go library for statically type-checking Go `text/template` and `html/template` usage.  
 It analyzes template parse trees against Go types using the standard `go/types` package.
 
-The library was originally developed as a backend for [`muxt check`](https://github.com/crhntr/muxt),
+The library was originally developed as addon feature for for [`muxt`](https://github.com/crhntr/muxt),
 a CLI tool for generating HTTP handler functions from HTML templates.
 The check package is encapsulated in the `muxt check` command.
 Consider using `muxt check` directly.
