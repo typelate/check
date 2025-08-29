@@ -19,14 +19,15 @@ func DefaultFunctions(pkg *types.Package) Functions {
 			"Sprintln": "println",
 		},
 		"html/template": {
-			"URLQueryEscaper": "urlescaper",
-			"HTMLEscaper":     "htmlescaper",
-		},
-		"text/template": {
 			"JSEscaper":       "js",
 			"URLQueryEscaper": "urlquery",
 			"HTMLEscaper":     "html",
 		},
+		//"text/template": {
+		//	"JSEscaper":       "js",
+		//	"URLQueryEscaper": "urlquery",
+		//	"HTMLEscaper":     "html",
+		//},
 	} {
 		if p, ok := findPackage(pkg, pn); ok && p != nil {
 			for funcIdent, templateFunc := range idents {
