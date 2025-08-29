@@ -1,4 +1,4 @@
-# Check
+# Check [![Go Reference](https://pkg.go.dev/badge/github.com/typelate/check.svg)](https://pkg.go.dev/github.com/typelate/check)
 
 **Check** is a Go library for statically type-checking `text/template` and `html/template`. It helps catch template/type mismatches early, making refactoring safer when changing types or templates.
 
