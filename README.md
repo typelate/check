@@ -10,8 +10,13 @@ To use it, call `Execute` and provide:
 See [example_test.go](./example_test.go) for a working example.
 
 Originally built as part of [`muxt`](https://github.com/crhntr/muxt),  
-the package also powers the `muxt check` CLI command.  
-If you just want command-line checks, consider using `muxt check` directly.
+this package also powers the `muxt check` CLI command.  
+If you only need command-line checks, use `muxt check` directly.  
+
+Unlike `muxt`, which requires templates to be defined as global variables,  
+this package lets you map templates to data parameters more flexibly (at the cost of some verbosity).
+
+For a simpler, easier-to-configure alternative, consider [jba/templatecheck](https://github.com/jba/templatecheck).
 
 ## Key Types and Functions
 
