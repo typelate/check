@@ -3,7 +3,7 @@
 **Check** is a Go library for statically type-checking `text/template` and `html/template`.  
 It helps catch template/type mismatches early, making refactoring safer when changing types or templates.
 
-To use it, provide:
+To use it, call `ParseTree` and provide:
 - a `types.Type` for the template’s data (`.`), and
 - the template’s `parse.Tree`.
 
