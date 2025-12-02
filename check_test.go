@@ -910,3 +910,64 @@ func getRowType(t *testing.T, p *packages.Package, row *ast.CompositeLit) types.
 	t.Fatalf("failed to evaluate type for row")
 	return nil
 }
+
+func TestTemplateNodeTypeHook(t *testing.T) {
+	// Create a template with template nodes
+	tmpl := template.Must(template.New("main").Parse(`{{define "sub"}}{{.Field}}{{end}}{{template "sub" .Data}}`))
+
+	// Track hook invocations
+	type HookCall struct {
+		treeName   string
+		nodeName   string
+		typeString string
+	}
+
+	// Create test data type
+	testPkg := loadPkg()[0]
+	testType := types.NewStruct(
+		[]*types.Var{
+			types.NewField(0, testPkg.Types, "Data", types.NewStruct(
+				[]*types.Var{
+					types.NewField(0, testPkg.Types, "Field", types.Typ[types.String], true),
+				},
+				nil,
+			), true),
+		},
+		nil,
+	)
+
+	// Set up the Global instance
+	global := check.NewGlobal(
+		testPkg.Types,
+		testPkg.Fset,
+		findHTMLTemplateTree(tmpl),
+		check.DefaultFunctions(testPkg.Types),
+	)
+
+	// Set the hook
+	var hookCalls []HookCall
+	global.TemplateNodeType = func(t *parse.Tree, node *parse.TemplateNode, tp types.Type) {
+		hookCalls = append(hookCalls, HookCall{
+			treeName:   t.Name,
+			nodeName:   node.Name,
+			typeString: tp.String(),
+		})
+	}
+
+	// Execute the check
+	tree := tmpl.Lookup("main").Tree
+	err := check.Execute(global, tree, testType)
+	require.NoError(t, err)
+
+	// Verify the hook was called
+	require.Len(t, hookCalls, 1, "hook should be called once for the template node")
+
+	call := hookCalls[0]
+	assert.Equal(t, "main", call.treeName, "tree name should be 'main'")
+	assert.Equal(t, "sub", call.nodeName, "node name should be 'sub'")
+
+	// The type passed to the template should be the Data field type (struct with Field)
+	// The String() representation is compact, so we check for "struct{" and "string"
+	assert.Contains(t, call.typeString, "struct{", "type should be a struct")
+	assert.Contains(t, call.typeString, "string", "type should contain string field")
+}

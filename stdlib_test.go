@@ -569,7 +569,7 @@ func TestExec(t *testing.T) {
 			dataType := stdlibTestRowType(t, testPkg, ttRows, tt.name)
 			require.NotNil(t, dataType)
 
-			global := check.NewGlobal(testPkg.Types, testPkg.Fset, findTextTree(tmpl), MortalFunctions(funcSource))
+			global := check.NewGlobal(testPkg.Types, testPkg.Fset, findTextTemplateTree(tmpl), MortalFunctions(funcSource))
 
 			checkErr := check.Execute(global, tmpl.Tree, dataType)
 			switch {

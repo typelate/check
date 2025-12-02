@@ -14,10 +14,13 @@ type Global struct {
 	trees TreeFinder
 	calls CallChecker
 
-	pkg             *types.Package
-	fileSet         *token.FileSet
-	typeNodeMapping TypeNodeMapping
+	pkg              *types.Package
+	fileSet          *token.FileSet
+	typeNodeMapping  TypeNodeMapping
+	TemplateNodeType TemplateNodeFunc
 }
+
+type TemplateNodeFunc func(t *parse.Tree, node *parse.TemplateNode, tp types.Type)
 
 func NewGlobal(pkg *types.Package, fileSet *token.FileSet, trees TreeFinder, fnChecker CallChecker) *Global {
 	return &Global{
@@ -245,6 +248,9 @@ func (s *scope) checkTemplateNode(tree *parse.Tree, dot types.Type, n *parse.Tem
 		x = downgradeUntyped(x)
 	} else {
 		x = types.Typ[types.UntypedNil]
+	}
+	if fn := s.global.TemplateNodeType; fn != nil {
+		fn(tree, n, x)
 	}
 	childTree, ok := s.global.trees.FindTree(n.Name)
 	if !ok {

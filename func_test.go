@@ -1,13 +1,24 @@
 package check_test
 
 import (
-	"text/template"
+	htmlTemplate "html/template"
+	textTemplate "text/template"
 	"text/template/parse"
 
 	"github.com/typelate/check"
 )
 
-func findTextTree(tmpl *template.Template) check.FindTreeFunc {
+func findTextTemplateTree(tmpl *textTemplate.Template) check.FindTreeFunc {
+	return func(name string) (*parse.Tree, bool) {
+		ts := tmpl.Lookup(name)
+		if ts == nil {
+			return nil, false
+		}
+		return ts.Tree, true
+	}
+}
+
+func findHTMLTemplateTree(tmpl *htmlTemplate.Template) check.FindTreeFunc {
 	return func(name string) (*parse.Tree, bool) {
 		ts := tmpl.Lookup(name)
 		if ts == nil {
