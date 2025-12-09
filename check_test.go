@@ -946,7 +946,7 @@ func TestTemplateNodeTypeHook(t *testing.T) {
 
 	// Set the hook
 	var hookCalls []HookCall
-	global.TemplateNodeType = func(t *parse.Tree, node *parse.TemplateNode, tp types.Type) {
+	global.InspectTemplateNode = func(t *parse.Tree, node *parse.TemplateNode, tp types.Type) {
 		hookCalls = append(hookCalls, HookCall{
 			treeName:   t.Name,
 			nodeName:   node.Name,
