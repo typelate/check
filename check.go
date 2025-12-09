@@ -10,6 +10,37 @@ import (
 	"text/template/parse"
 )
 
+type Error struct {
+	Tree *parse.Tree
+	Node parse.Node
+	err  error
+}
+
+func newError(tree *parse.Tree, node parse.Node, message string, args ...any) *Error {
+	loc, context := tree.ErrorContext(node)
+	return &Error{
+		Tree: tree,
+		Node: node,
+		err:  fmt.Errorf("type check failed: %s: executing %q at <%s>: %w", loc, tree.Name, context, fmt.Errorf(message, args...)),
+	}
+}
+
+func wrapError(tree *parse.Tree, node parse.Node, err error) *Error {
+	return &Error{
+		Tree: tree,
+		Node: node,
+		err:  err,
+	}
+}
+
+func (e *Error) Error() string {
+	return e.err.Error()
+}
+
+func (e *Error) Unwrap() error {
+	return e.err
+}
+
 type Global struct {
 	trees TreeFinder
 	calls CallChecker
@@ -99,7 +130,7 @@ func (s *scope) walk(tree *parse.Tree, dot, prev types.Type, node parse.Node) (t
 	case *parse.StringNode:
 		return types.Typ[types.String], nil
 	case *parse.NumberNode:
-		return newNumberNodeType(n)
+		return newNumberNodeType(tree, n)
 	case *parse.VariableNode:
 		return s.checkVariableNode(tree, n, nil)
 	case *parse.IdentifierNode:
@@ -121,7 +152,7 @@ func (s *scope) walk(tree *parse.Tree, dot, prev types.Type, node parse.Node) (t
 	case *parse.ContinueNode:
 		return nil, nil
 	default:
-		return nil, fmt.Errorf("missing node type check %T", n)
+		return nil, newError(tree, n, "missing node type check %T", n)
 	}
 }
 
@@ -136,7 +167,7 @@ func (s *scope) checkChainNode(tree *parse.Tree, dot, prev types.Type, n *parse.
 func (s *scope) checkVariableNode(tree *parse.Tree, n *parse.VariableNode, args []types.Type) (types.Type, error) {
 	tp, ok := s.variables[n.Ident[0]]
 	if !ok {
-		return nil, fmt.Errorf("variable %s not found", n.Ident[0])
+		return nil, newError(tree, n, "variable %s not found", n.Ident[0])
 	}
 	return s.checkIdentifiers(tree, tp, n, n.Ident[1:], args)
 }
@@ -207,7 +238,7 @@ func (s *scope) checkWithNode(tree *parse.Tree, dot types.Type, n *parse.WithNod
 	return nil
 }
 
-func newNumberNodeType(constant *parse.NumberNode) (types.Type, error) {
+func newNumberNodeType(tree *parse.Tree, constant *parse.NumberNode) (types.Type, error) {
 	switch {
 	case constant.IsComplex:
 		return types.Typ[types.UntypedComplex], nil
@@ -220,12 +251,12 @@ func newNumberNodeType(constant *parse.NumberNode) (types.Type, error) {
 	case constant.IsInt:
 		n := int(constant.Int64)
 		if int64(n) != constant.Int64 {
-			return nil, fmt.Errorf("%s overflows int", constant.Text)
+			return nil, newError(tree, constant, "%s overflows int", constant.Text)
 		}
 		return types.Typ[types.UntypedInt], nil
 
 	case constant.IsUint:
-		return nil, fmt.Errorf("%s overflows int", constant.Text)
+		return nil, newError(tree, constant, "%s overflows int", constant.Text)
 	}
 	return types.Typ[types.UntypedInt], nil
 }
@@ -255,7 +286,7 @@ func (s *scope) checkTemplateNode(tree *parse.Tree, dot types.Type, n *parse.Tem
 	}
 	childTree, ok := s.global.trees.FindTree(n.Name)
 	if !ok {
-		return fmt.Errorf("template %q not found", n.Name)
+		return newError(tree, n, "template %q not found", n.Name)
 	}
 	childScope := scope{
 		global: s.global,
@@ -317,11 +348,11 @@ func (s *scope) checkCommandNode(tree *parse.Tree, dot, prev types.Type, cmd *pa
 		}
 		tp, err := s.global.calls.CheckCall(n.Ident, cmd.Args[1:], argTypes)
 		if err != nil {
-			return nil, s.error(tree, cmd, err)
+			return nil, wrapError(tree, cmd, err)
 		}
 		return tp, nil
 	case *parse.PipeNode:
-		if err := s.notAFunction(cmd.Args, prev); err != nil {
+		if err := s.notAFunction(tree, n, cmd.Args, prev); err != nil {
 			return nil, err
 		}
 		return s.checkPipeNode(tree, dot, n)
@@ -333,7 +364,7 @@ func (s *scope) checkCommandNode(tree *parse.Tree, dot, prev types.Type, cmd *pa
 		return s.checkVariableNode(tree, n, argTypes)
 	}
 
-	if err := s.notAFunction(cmd.Args, prev); err != nil {
+	if err := s.notAFunction(tree, first, cmd.Args, prev); err != nil {
 		return nil, err
 	}
 
@@ -343,13 +374,13 @@ func (s *scope) checkCommandNode(tree *parse.Tree, dot, prev types.Type, cmd *pa
 	case *parse.StringNode:
 		return types.Typ[types.UntypedString], nil
 	case *parse.NumberNode:
-		return newNumberNodeType(n)
+		return newNumberNodeType(tree, n)
 	case *parse.DotNode:
 		return dot, nil
 	case *parse.NilNode:
-		return nil, s.error(tree, n, fmt.Errorf("nil is not a command"))
+		return nil, newError(tree, n, "nil is not a command")
 	default:
-		return nil, s.error(tree, first, fmt.Errorf("can't evaluate command %q", first))
+		return nil, newError(tree, first, "can't evaluate command %q", first)
 	}
 }
 
@@ -368,9 +399,9 @@ func (s *scope) argumentTypes(tree *parse.Tree, dot types.Type, prev types.Type,
 	return argTypes, nil
 }
 
-func (s *scope) notAFunction(args []parse.Node, final types.Type) error {
+func (s *scope) notAFunction(tree *parse.Tree, node parse.Node, args []parse.Node, final types.Type) error {
 	if len(args) > 1 || final != nil {
-		return fmt.Errorf("can't give argument to non-function %s", args[0])
+		return newError(tree, node, "can't give argument to non-function %s", args[0])
 	}
 	return nil
 }
@@ -390,8 +421,7 @@ func (s *scope) checkIdentifiers(tree *parse.Tree, dot types.Type, n parse.Node,
 					x = xx.Elem()
 					_, err := strconv.Atoi(ident)
 					if err != nil {
-						loc, _ := tree.ErrorContext(n)
-						return nil, fmt.Errorf(`%s: executing %q at <%s>: can't evaluate field one in type %s`, loc, tree.Name, n.String(), xx.String())
+						return nil, newError(tree, n, `can't evaluate field one in type %s`, xx.String())
 					}
 				case types.String:
 					x = xx.Elem()
@@ -404,12 +434,11 @@ func (s *scope) checkIdentifiers(tree *parse.Tree, dot types.Type, n parse.Node,
 			continue
 		default:
 			if !token.IsExported(ident) {
-				return nil, s.error(tree, n, fmt.Errorf("field or method %s is not exported", ident))
+				return nil, newError(tree, n, "field or method %s is not exported", ident)
 			}
 			obj, _, _ := types.LookupFieldOrMethod(x, true, s.global.pkg, ident)
 			if obj == nil {
-				loc, _ := tree.ErrorContext(n)
-				return nil, fmt.Errorf("type check failed: %s: %s not found on %s", loc, ident, x)
+				return nil, newError(tree, n, "%s not found on %s", ident, x)
 			}
 			switch o := obj.(type) {
 			default:
@@ -418,50 +447,43 @@ func (s *scope) checkIdentifiers(tree *parse.Tree, dot types.Type, n parse.Node,
 				sig := o.Signature()
 				resultLen := sig.Results().Len()
 				if resultLen < 1 || resultLen > 2 {
-					loc, _ := tree.ErrorContext(n)
 					methodPos := s.global.fileSet.Position(o.Pos())
-					return nil, fmt.Errorf("type check failed: %s: function %s has %d return values; should be 1 or 2: incorrect signature at %s", loc, ident, resultLen, methodPos)
+					return nil, newError(tree, n, "function %s has %d return values; should be 1 or 2: incorrect signature at %s", ident, resultLen, methodPos)
 				}
 				if resultLen > 1 {
-					loc, _ := tree.ErrorContext(n)
 					methodPos := s.global.fileSet.Position(obj.Pos())
 					finalResult := sig.Results().At(sig.Results().Len() - 1)
 					errorType := types.Universe.Lookup("error")
 					if !types.Identical(errorType.Type(), finalResult.Type()) {
-						return nil, fmt.Errorf("type check failed: %s: invalid function signature for %s: second return value should be error; is %s: incorrect signature at %s", loc, ident, finalResult.Type(), methodPos)
+						return nil, newError(tree, n, "invalid function signature for %s: second return value should be error; is %s: incorrect signature at %s", ident, finalResult.Type(), methodPos)
 					}
 				}
 				if i == len(idents)-1 {
 					res, err := checkCallArguments(sig, args)
 					if err != nil {
-						return nil, s.error(tree, n, err)
+						return nil, wrapError(tree, n, err)
 					}
 					return res, nil
 				}
 				x = sig.Results().At(0).Type()
 			}
 			if _, ok := x.(*types.Signature); ok && i < len(idents)-1 {
-				return nil, s.error(tree, n, fmt.Errorf("identifier chain not supported for type %s", x.String()))
+				return nil, newError(tree, n, "identifier chain not supported for type %s", x.String())
 			}
 		}
 	}
 	if len(args) > 0 {
 		sig, ok := x.(*types.Signature)
 		if !ok {
-			return nil, s.error(tree, n, fmt.Errorf("expected method or function"))
+			return nil, newError(tree, n, "expected method or function")
 		}
 		tp, err := checkCallArguments(sig, args)
 		if err != nil {
-			return nil, s.error(tree, n, err)
+			return nil, wrapError(tree, n, err)
 		}
 		return tp, nil
 	}
 	return x, nil
-}
-
-func (s *scope) error(tree *parse.Tree, n parse.Node, err error) error {
-	loc, _ := tree.ErrorContext(n)
-	return fmt.Errorf("type check failed: %s: executing %q at <%s>: %w", loc, tree.Name, n, err)
 }
 
 func (s *scope) checkRangeNode(tree *parse.Tree, dot types.Type, n *parse.RangeNode) error {
@@ -513,7 +535,7 @@ func (s *scope) checkRangeNode(tree *parse.Tree, dot types.Type, n *parse.RangeN
 			}
 			return nil
 		default:
-			return s.error(tree, n.Pipe, fmt.Errorf("range can't iterate over %s", strings.TrimPrefix(pipeType.String(), "untyped ")))
+			return newError(tree, n.Pipe, "range can't iterate over %s", strings.TrimPrefix(pipeType.String(), "untyped "))
 		}
 	case *types.Signature:
 		if v1, v2, ok := isIter2(pt); ok {
@@ -532,13 +554,13 @@ func (s *scope) checkRangeNode(tree *parse.Tree, dot types.Type, n *parse.RangeN
 				child.variables[n.Pipe.Decl[0].Ident[0]] = val
 			}
 			if len(n.Pipe.Decl) > 1 {
-				return s.error(tree, n.Pipe, fmt.Errorf("iter.Seq[T] must not iterate over more than one variable"))
+				return newError(tree, n.Pipe, "iter.Seq[T] must not iterate over more than one variable")
 			}
 			return nil
 		}
-		return s.error(tree, n.Pipe, fmt.Errorf("failed to range over function %s", pipeType))
+		return newError(tree, n.Pipe, "failed to range over function %s", pipeType)
 	default:
-		return s.error(tree, n.Pipe, fmt.Errorf("failed to range over %s", pipeType))
+		return newError(tree, n.Pipe, "failed to range over %s", pipeType)
 	}
 	if _, err := child.walk(tree, x, nil, n.List); err != nil {
 		return err
@@ -584,13 +606,13 @@ func (s *scope) checkIdentifierNode(tree *parse.Tree, n *parse.IdentifierNode) (
 	if !strings.HasPrefix(n.Ident, "$") {
 		tp, err := s.global.calls.CheckCall(n.Ident, nil, nil)
 		if err != nil {
-			return nil, s.error(tree, n, err)
+			return nil, wrapError(tree, n, err)
 		}
 		return tp, err
 	}
 	tp, ok := s.variables[n.Ident]
 	if !ok {
-		return nil, fmt.Errorf("failed to find identifier %s", n.Ident)
+		return nil, newError(tree, n, "failed to find identifier %s", n.Ident)
 	}
 	return tp, nil
 }

@@ -81,7 +81,7 @@ func ExampleExecute() {
 	{
 		const templateName = "unknown field"
 		if err := check.Execute(global, tmpl.Lookup("unknown field").Tree, personObj.Type()); err != nil {
-			fmt.Printf("template %q type error: %v\n", templateName, err)
+			fmt.Println(err.Error())
 		} else {
 			fmt.Printf("template %q type-check passed\n", templateName)
 		}
@@ -89,11 +89,11 @@ func ExampleExecute() {
 	{
 		const templateName = "known field"
 		if err := check.Execute(global, tmpl.Lookup("known field").Tree, personObj.Type()); err != nil {
-			fmt.Printf("template %q type error: %v\n", templateName, err)
+			fmt.Println(err.Error())
 		} else {
 			fmt.Printf("template %q type-check passed\n", templateName)
 		}
 	}
-	// Output: template "unknown field" type error: type check failed: example:3:3: UnknownField not found on github.com/typelate/check_test.Person
+	// Output: type check failed: example:3:3: executing "unknown field" at <.UnknownField>: UnknownField not found on github.com/typelate/check_test.Person
 	// template "known field" type-check passed
 }

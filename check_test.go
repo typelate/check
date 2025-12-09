@@ -93,7 +93,7 @@ func TestTree(t *testing.T) {
 			Template: `{{.Field}}`,
 			Data:     Void{},
 			Error: func(t *testing.T, err, _ error, tp types.Type) {
-				require.EqualError(t, err, fmt.Sprintf(`type check failed: template:1:2: Field not found on %s`, tp))
+				require.EqualError(t, err, fmt.Sprintf(`type check failed: template:1:2: executing "template" at <.Field>: Field not found on %s`, tp))
 			},
 		},
 		{
@@ -110,7 +110,7 @@ func TestTree(t *testing.T) {
 				require.NotNil(t, method)
 				methodPos := testPkg.Fset.Position(method.Pos())
 
-				require.EqualError(t, err, fmt.Sprintf(`type check failed: template:1:2: function Method has 0 return values; should be 1 or 2: incorrect signature at %s`, methodPos))
+				require.EqualError(t, err, fmt.Sprintf(`type check failed: template:1:2: executing "template" at <.Method>: function Method has 0 return values; should be 1 or 2: incorrect signature at %s`, methodPos))
 			},
 		},
 		{
@@ -132,7 +132,7 @@ func TestTree(t *testing.T) {
 				require.NotNil(t, method)
 				methodPos := testPkg.Fset.Position(method.Pos())
 
-				require.EqualError(t, err, fmt.Sprintf(`type check failed: template:1:2: invalid function signature for Method: second return value should be error; is int: incorrect signature at %s`, methodPos))
+				require.EqualError(t, err, fmt.Sprintf(`type check failed: template:1:2: executing "template" at <.Method>: invalid function signature for Method: second return value should be error; is int: incorrect signature at %s`, methodPos))
 			},
 		},
 		{
@@ -144,7 +144,7 @@ func TestTree(t *testing.T) {
 				require.NotNil(t, method)
 				methodPos := testPkg.Fset.Position(method.Pos())
 
-				require.EqualError(t, err, fmt.Sprintf(`type check failed: template:1:2: function Method has 3 return values; should be 1 or 2: incorrect signature at %s`, methodPos))
+				require.EqualError(t, err, fmt.Sprintf(`type check failed: template:1:2: executing "template" at <.Method>: function Method has 3 return values; should be 1 or 2: incorrect signature at %s`, methodPos))
 			},
 		},
 		{
@@ -163,7 +163,7 @@ func TestTree(t *testing.T) {
 				require.NotNil(t, m2)
 				methodPos := testPkg.Fset.Position(m2.Pos())
 
-				require.EqualError(t, err, fmt.Sprintf(`type check failed: template:1:9: function Method has 0 return values; should be 1 or 2: incorrect signature at %s`, methodPos))
+				require.EqualError(t, err, fmt.Sprintf(`type check failed: template:1:9: executing "template" at <.Method.Method>: function Method has 0 return values; should be 1 or 2: incorrect signature at %s`, methodPos))
 			},
 		},
 		{
@@ -709,7 +709,7 @@ func TestTree(t *testing.T) {
 			Data:     nil,
 			Error: func(t *testing.T, checkErr, execErr error, tp types.Type) {
 				assert.NoError(t, execErr)
-				require.ErrorContains(t, checkErr, "type check failed: template:1:8: Unknown not found on untyped nil")
+				require.ErrorContains(t, checkErr, `type check failed: template:1:8: executing "template" at <.Unknown>: Unknown not found on untyped nil`)
 			},
 		},
 		{
@@ -718,7 +718,7 @@ func TestTree(t *testing.T) {
 			Data:     nil,
 			Error: func(t *testing.T, checkErr, execErr error, tp types.Type) {
 				assert.NoError(t, execErr)
-				require.ErrorContains(t, checkErr, "type check failed: template:1:7: Unknown not found on untyped nil")
+				require.ErrorContains(t, checkErr, `type check failed: template:1:7: executing "template" at <.Unknown>: Unknown not found on untyped nil`)
 			},
 		},
 		{
