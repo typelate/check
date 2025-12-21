@@ -46,20 +46,20 @@ func (functions Functions) Add(m Functions) Functions {
 	return x
 }
 
-func (functions Functions) CheckCall(funcIdent string, argNodes []parse.Node, argTypes []types.Type) (types.Type, error) {
+func (functions Functions) CheckCall(global *Global, funcIdent string, argNodes []parse.Node, argTypes []types.Type) (types.Type, error) {
 	fn, ok := functions[funcIdent]
 	if !ok {
-		return builtInCheck(funcIdent, argNodes, argTypes)
+		return builtInCheck(global, funcIdent, argNodes, argTypes)
 	}
 	if resultLen := fn.Results().Len(); resultLen == 0 {
 		return nil, fmt.Errorf("function %s has no results", funcIdent)
 	} else if resultLen > 2 {
 		return nil, fmt.Errorf("function %s has too many results", funcIdent)
 	}
-	return checkCallArguments(fn, argTypes)
+	return checkCallArguments(global, fn, argTypes)
 }
 
-func checkCallArguments(fn *types.Signature, args []types.Type) (types.Type, error) {
+func checkCallArguments(global *Global, fn *types.Signature, args []types.Type) (types.Type, error) {
 	if exp, got := fn.Params().Len(), len(args); !fn.Variadic() && exp != got {
 		return nil, fmt.Errorf("wrong number of args expected %d but got %d", exp, got)
 	}
@@ -87,7 +87,7 @@ func checkCallArguments(fn *types.Signature, args []types.Type) (types.Type, err
 					return pt, nil
 				}
 			}
-			return nil, fmt.Errorf("argument %d has type %s expected %s", i, at, pt)
+			return nil, fmt.Errorf("argument %d has type %s expected %s", i, global.TypeString(at), global.TypeString(pt))
 		}
 	}
 	if isVar {
@@ -106,7 +106,7 @@ func checkCallArguments(fn *types.Signature, args []types.Type) (types.Type, err
 						return pt, nil
 					}
 				}
-				return nil, fmt.Errorf("argument %d has type %s expected %s", i, at, pt)
+				return nil, fmt.Errorf("argument %d has type %s expected %s", i, global.TypeString(at), global.TypeString(pt))
 			}
 		}
 	}
@@ -128,17 +128,17 @@ func findPackage(pkg *types.Package, path string) (*types.Package, bool) {
 	return nil, false
 }
 
-func builtInCheck(funcIdent string, nodes []parse.Node, argTypes []types.Type) (types.Type, error) {
+func builtInCheck(global *Global, funcIdent string, nodes []parse.Node, argTypes []types.Type) (types.Type, error) {
 	switch funcIdent {
 	case "attrescaper":
 		return types.Universe.Lookup("string").Type(), nil
 	case "len":
 		switch x := argTypes[0].Underlying().(type) {
 		default:
-			return nil, fmt.Errorf("built-in len expects the first argument to be an array, slice, map, or string got %s", x.String())
+			return nil, fmt.Errorf("built-in len expects the first argument to be an array, slice, map, or string got %s", global.TypeString(x))
 		case *types.Basic:
 			if x.Kind() != types.String {
-				return nil, fmt.Errorf("built-in len expects the first argument to be an array, slice, map, or string got %s", x.String())
+				return nil, fmt.Errorf("built-in len expects the first argument to be an array, slice, map, or string got %s", global.TypeString(x))
 			}
 		case *types.Array:
 		case *types.Slice:
@@ -156,10 +156,10 @@ func builtInCheck(funcIdent string, nodes []parse.Node, argTypes []types.Type) (
 		}
 		switch x := argTypes[0].Underlying().(type) {
 		default:
-			return nil, fmt.Errorf("built-in slice expects the first argument to be an array, slice, or string got %s", x.String())
+			return nil, fmt.Errorf("built-in slice expects the first argument to be an array, slice, or string got %s", global.TypeString(x))
 		case *types.Basic:
 			if x.Kind() != types.String {
-				return nil, fmt.Errorf("built-in slice expects the first argument to be an array, slice, or string got %s", x.String())
+				return nil, fmt.Errorf("built-in slice expects the first argument to be an array, slice, or string got %s", global.TypeString(x))
 			}
 			if len(nodes) == 4 {
 				return nil, fmt.Errorf("can not 3 index slice a string")
@@ -194,7 +194,7 @@ func builtInCheck(funcIdent string, nodes []parse.Node, argTypes []types.Type) (
 		if !ok {
 			return nil, fmt.Errorf("call expected a function signature")
 		}
-		return checkCallArguments(sig, argTypes[1:])
+		return checkCallArguments(global, sig, argTypes[1:])
 	case "not":
 		if len(argTypes) < 1 {
 			return nil, fmt.Errorf("built-in not expects at least one argument")
@@ -208,21 +208,21 @@ func builtInCheck(funcIdent string, nodes []parse.Node, argTypes []types.Type) (
 			switch x := result.(type) {
 			case *types.Slice:
 				if !types.AssignableTo(at, types.Typ[types.Int]) {
-					return nil, fmt.Errorf("slice index expects int got %s", at)
+					return nil, fmt.Errorf("slice index expects int got %s", global.TypeString(at))
 				}
 				result = x.Elem()
 			case *types.Array:
 				if !types.AssignableTo(at, types.Typ[types.Int]) {
-					return nil, fmt.Errorf("slice index expects int got %s", at)
+					return nil, fmt.Errorf("slice index expects int got %s", global.TypeString(at))
 				}
 				result = x.Elem()
 			case *types.Map:
 				if !types.AssignableTo(at, x.Key()) {
-					return nil, fmt.Errorf("slice index expects %s got %s", x.Key(), at)
+					return nil, fmt.Errorf("slice index expects %s got %s", global.TypeString(x.Key()), global.TypeString(at))
 				}
 				result = x.Elem()
 			default:
-				return nil, fmt.Errorf("can not index over %s", result)
+				return nil, fmt.Errorf("can not index over %s", global.TypeString(result))
 			}
 		}
 		return result, nil

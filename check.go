@@ -1,6 +1,7 @@
 package check
 
 import (
+	"bytes"
 	"fmt"
 	"go/token"
 	"go/types"
@@ -50,6 +51,11 @@ type Global struct {
 	typeNodeMapping TypeNodeMapping
 
 	InspectTemplateNode TemplateNodeInspectorFunc
+
+	// Qualifier controls how types are printed in error messages.
+	// If nil, types are printed with their full package path.
+	// See types.WriteType for details.
+	Qualifier types.Qualifier
 }
 
 type TemplateNodeInspectorFunc func(t *parse.Tree, node *parse.TemplateNode, tp types.Type)
@@ -62,6 +68,13 @@ func NewGlobal(pkg *types.Package, fileSet *token.FileSet, trees TreeFinder, fnC
 		fileSet:         fileSet,
 		typeNodeMapping: make(TypeNodeMapping),
 	}
+}
+
+// TypeString returns the string representation of typ using the configured Qualifier.
+func (g *Global) TypeString(typ types.Type) string {
+	var buf bytes.Buffer
+	types.WriteType(&buf, typ, g.Qualifier)
+	return buf.String()
 }
 
 // TreeFinder should wrap https://pkg.go.dev/html/template#Template.Lookup and return the Tree field from the Template
@@ -77,7 +90,7 @@ func (fn FindTreeFunc) FindTree(name string) (*parse.Tree, bool) {
 }
 
 type CallChecker interface {
-	CheckCall(string, []parse.Node, []types.Type) (types.Type, error)
+	CheckCall(*Global, string, []parse.Node, []types.Type) (types.Type, error)
 }
 
 type TypeNodeMapping map[types.Type][]parse.Node
@@ -346,7 +359,7 @@ func (s *scope) checkCommandNode(tree *parse.Tree, dot, prev types.Type, cmd *pa
 		if err != nil {
 			return nil, err
 		}
-		tp, err := s.global.calls.CheckCall(n.Ident, cmd.Args[1:], argTypes)
+		tp, err := s.global.calls.CheckCall(s.global, n.Ident, cmd.Args[1:], argTypes)
 		if err != nil {
 			return nil, wrapError(tree, cmd, err)
 		}
@@ -421,7 +434,7 @@ func (s *scope) checkIdentifiers(tree *parse.Tree, dot types.Type, n parse.Node,
 					x = xx.Elem()
 					_, err := strconv.Atoi(ident)
 					if err != nil {
-						return nil, newError(tree, n, `can't evaluate field one in type %s`, xx.String())
+						return nil, newError(tree, n, `can't evaluate field one in type %s`, s.global.TypeString(xx))
 					}
 				case types.String:
 					x = xx.Elem()
@@ -438,7 +451,7 @@ func (s *scope) checkIdentifiers(tree *parse.Tree, dot types.Type, n parse.Node,
 			}
 			obj, _, _ := types.LookupFieldOrMethod(x, true, s.global.pkg, ident)
 			if obj == nil {
-				return nil, newError(tree, n, "%s not found on %s", ident, x)
+				return nil, newError(tree, n, "%s not found on %s", ident, s.global.TypeString(x))
 			}
 			switch o := obj.(type) {
 			default:
@@ -455,11 +468,11 @@ func (s *scope) checkIdentifiers(tree *parse.Tree, dot types.Type, n parse.Node,
 					finalResult := sig.Results().At(sig.Results().Len() - 1)
 					errorType := types.Universe.Lookup("error")
 					if !types.Identical(errorType.Type(), finalResult.Type()) {
-						return nil, newError(tree, n, "invalid function signature for %s: second return value should be error; is %s: incorrect signature at %s", ident, finalResult.Type(), methodPos)
+						return nil, newError(tree, n, "invalid function signature for %s: second return value should be error; is %s: incorrect signature at %s", ident, s.global.TypeString(finalResult.Type()), methodPos)
 					}
 				}
 				if i == len(idents)-1 {
-					res, err := checkCallArguments(sig, args)
+					res, err := checkCallArguments(s.global, sig, args)
 					if err != nil {
 						return nil, wrapError(tree, n, err)
 					}
@@ -468,7 +481,7 @@ func (s *scope) checkIdentifiers(tree *parse.Tree, dot types.Type, n parse.Node,
 				x = sig.Results().At(0).Type()
 			}
 			if _, ok := x.(*types.Signature); ok && i < len(idents)-1 {
-				return nil, newError(tree, n, "identifier chain not supported for type %s", x.String())
+				return nil, newError(tree, n, "identifier chain not supported for type %s", s.global.TypeString(x))
 			}
 		}
 	}
@@ -477,7 +490,7 @@ func (s *scope) checkIdentifiers(tree *parse.Tree, dot types.Type, n parse.Node,
 		if !ok {
 			return nil, newError(tree, n, "expected method or function")
 		}
-		tp, err := checkCallArguments(sig, args)
+		tp, err := checkCallArguments(s.global, sig, args)
 		if err != nil {
 			return nil, wrapError(tree, n, err)
 		}
@@ -535,7 +548,7 @@ func (s *scope) checkRangeNode(tree *parse.Tree, dot types.Type, n *parse.RangeN
 			}
 			return nil
 		default:
-			return newError(tree, n.Pipe, "range can't iterate over %s", strings.TrimPrefix(pipeType.String(), "untyped "))
+			return newError(tree, n.Pipe, "range can't iterate over %s", strings.TrimPrefix(s.global.TypeString(pipeType), "untyped "))
 		}
 	case *types.Signature:
 		if v1, v2, ok := isIter2(pt); ok {
@@ -558,9 +571,9 @@ func (s *scope) checkRangeNode(tree *parse.Tree, dot types.Type, n *parse.RangeN
 			}
 			return nil
 		}
-		return newError(tree, n.Pipe, "failed to range over function %s", pipeType)
+		return newError(tree, n.Pipe, "failed to range over function %s", s.global.TypeString(pipeType))
 	default:
-		return newError(tree, n.Pipe, "failed to range over %s", pipeType)
+		return newError(tree, n.Pipe, "failed to range over %s", s.global.TypeString(pipeType))
 	}
 	if _, err := child.walk(tree, x, nil, n.List); err != nil {
 		return err
@@ -604,7 +617,7 @@ func isIter2(signature *types.Signature) (types.Type, types.Type, bool) {
 
 func (s *scope) checkIdentifierNode(tree *parse.Tree, n *parse.IdentifierNode) (types.Type, error) {
 	if !strings.HasPrefix(n.Ident, "$") {
-		tp, err := s.global.calls.CheckCall(n.Ident, nil, nil)
+		tp, err := s.global.calls.CheckCall(s.global, n.Ident, nil, nil)
 		if err != nil {
 			return nil, wrapError(tree, n, err)
 		}

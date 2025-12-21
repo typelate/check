@@ -625,11 +625,11 @@ func stdlibTestRowType(t *testing.T, p *packages.Package, ttRows *ast.CompositeL
 
 type MortalFunctions check.Functions
 
-func (fn MortalFunctions) CheckCall(name string, nodes []parse.Node, args []types.Type) (types.Type, error) {
+func (fn MortalFunctions) CheckCall(global *check.Global, name string, nodes []parse.Node, args []types.Type) (types.Type, error) {
 	switch name {
 	case "die":
 		return nil, fmt.Errorf("exec error die")
 	default:
-		return check.Functions(fn).CheckCall(name, nodes, args)
+		return check.Functions(fn).CheckCall(global, name, nodes, args)
 	}
 }
