@@ -281,11 +281,13 @@ type T struct {
 	ErrFunc                func() (string, error)
 	PanicFunc              func() string
 	TooFewReturnCountFunc  func()
-	TooManyReturnCountFunc func() (string, error, int)
+	TooManyReturnCountFunc func() (string, int, error)
 	InvalidReturnTypeFunc  func() (string, bool)
 	// Template to test evaluation of templates.
 	Tmpl *template.Template
+
 	// Unexported field; cannot be accessed by template.
+	//lint:ignore U1000 it is used in a template
 	unexported int
 }
 
@@ -371,7 +373,7 @@ var tVal = &T{
 	ErrFunc:                   func() (string, error) { return "bla", nil },
 	PanicFunc:                 func() string { panic("test panic") },
 	TooFewReturnCountFunc:     func() {},
-	TooManyReturnCountFunc:    func() (string, error, int) { return "", nil, 0 },
+	TooManyReturnCountFunc:    func() (string, int, error) { return "", 0, nil },
 	InvalidReturnTypeFunc:     func() (string, bool) { return "", false },
 	Tmpl:                      template.Must(template.New("x").Parse("test template")), // "x" is the value of .X
 }
@@ -432,12 +434,12 @@ func (t *T) MAdd(a int, b []int) []int {
 	return v
 }
 
-var myError = errors.New("my error")
+var errMine = errors.New("my error")
 
 // MyError returns a value and an error according to its argument.
 func (t *T) MyError(error bool) (bool, error) {
 	if error {
-		return true, myError
+		return true, errMine
 	}
 	return false, nil
 }
