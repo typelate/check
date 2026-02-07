@@ -31,7 +31,15 @@ func DefaultFunctions(pkg *types.Package) Functions {
 	} {
 		if p, ok := findPackage(pkg, pn); ok && p != nil {
 			for funcIdent, templateFunc := range idents {
-				fns[templateFunc] = p.Scope().Lookup(funcIdent).Type().(*types.Signature)
+				obj := p.Scope().Lookup(funcIdent)
+				if obj == nil {
+					continue
+				}
+				sig, ok := obj.Type().(*types.Signature)
+				if !ok {
+					continue
+				}
+				fns[templateFunc] = sig
 			}
 		}
 	}

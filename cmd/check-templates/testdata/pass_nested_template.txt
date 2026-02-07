@@ -1,0 +1,40 @@
+# Nested template calls should propagate the data type correctly.
+
+check-templates
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- main.go --
+package main
+
+import (
+	"embed"
+	"fmt"
+	"html/template"
+	"io"
+)
+
+var (
+	//go:embed *.gohtml
+	source embed.FS
+
+	templates = template.Must(template.ParseFS(source, "*"))
+)
+
+type Page struct {
+	Title string
+}
+
+func render() {
+	_ = templates.ExecuteTemplate(io.Discard, "index.gohtml", Page{})
+}
+
+var _ = fmt.Sprint
+
+-- index.gohtml --
+{{template "header.gohtml" .}}
+<p>body</p>
+-- header.gohtml --
+<h1>{{.Title}}</h1>

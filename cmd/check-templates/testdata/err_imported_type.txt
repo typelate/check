@@ -1,0 +1,42 @@
+# Types imported from other packages should report errors for missing fields.
+
+! check-templates
+stderr 'type check failed:.*index\.gohtml:1:2: executing "index\.gohtml" at <\.Missing>: Missing not found on example\.com/app/internal/model\.Page'
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- internal/model/types.go --
+package model
+
+type Page struct {
+	Title string
+}
+-- main.go --
+package main
+
+import (
+	"embed"
+	"fmt"
+	"html/template"
+	"io"
+
+	"example.com/app/internal/model"
+)
+
+var (
+	//go:embed *.gohtml
+	source embed.FS
+
+	templates = template.Must(template.ParseFS(source, "*"))
+)
+
+func render() {
+	_ = templates.ExecuteTemplate(io.Discard, "index.gohtml", model.Page{})
+}
+
+var _ = fmt.Sprint
+
+-- index.gohtml --
+{{.Missing}}

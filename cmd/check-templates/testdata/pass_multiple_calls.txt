@@ -1,0 +1,48 @@
+# Multiple ExecuteTemplate calls with different types all pass.
+
+check-templates
+! stderr .
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- main.go --
+package main
+
+import (
+	"embed"
+	"fmt"
+	"html/template"
+	"net/http"
+)
+
+var (
+	//go:embed *.gohtml
+	source embed.FS
+
+	templates = template.Must(template.ParseFS(source, "*"))
+)
+
+type IndexPage struct {
+	Title string
+}
+
+type AboutPage struct {
+	Name string
+}
+
+func handleIndex(w http.ResponseWriter, r *http.Request) {
+	_ = templates.ExecuteTemplate(w, "index.gohtml", IndexPage{Title: "Home"})
+}
+
+func handleAbout(w http.ResponseWriter, r *http.Request) {
+	_ = templates.ExecuteTemplate(w, "about.gohtml", AboutPage{Name: "World"})
+}
+
+var _ = fmt.Sprint
+
+-- index.gohtml --
+<h1>{{.Title}}</h1>
+-- about.gohtml --
+<p>{{.Name}}</p>

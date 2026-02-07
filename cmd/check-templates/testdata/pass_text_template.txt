@@ -1,0 +1,37 @@
+# text/template should be checked the same as html/template.
+
+check-templates
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- main.go --
+package main
+
+import (
+	"embed"
+	"fmt"
+	"io"
+	"text/template"
+)
+
+var (
+	//go:embed *.gotmpl
+	source embed.FS
+
+	templates = template.Must(template.ParseFS(source, "*"))
+)
+
+type Page struct {
+	Title string
+}
+
+func render() {
+	_ = templates.ExecuteTemplate(io.Discard, "index.gotmpl", Page{Title: "Home"})
+}
+
+var _ = fmt.Sprint
+
+-- index.gotmpl --
+{{.Title}}

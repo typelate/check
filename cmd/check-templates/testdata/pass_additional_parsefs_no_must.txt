@@ -1,0 +1,47 @@
+# Template defined at top level, modified in a function without template.Must.
+# The ParseFS call result is discarded but should still be detected.
+
+check-templates
+! stderr .
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- main.go --
+package main
+
+import (
+	"embed"
+	"fmt"
+	"html/template"
+	"net/http"
+)
+
+//go:embed *.gohtml
+var source embed.FS
+
+type IndexPage struct {
+	Title string
+}
+
+type AboutPage struct {
+	Name string
+}
+
+var ts = template.Must(template.New("app").ParseFS(source, "index.gohtml"))
+
+func setup() {
+	_, _ = ts.ParseFS(source, "about.gohtml")
+}
+
+func handleAbout(w http.ResponseWriter, r *http.Request) {
+	_ = ts.ExecuteTemplate(w, "about.gohtml", AboutPage{Name: "World"})
+}
+
+var _ = fmt.Sprint
+
+-- index.gohtml --
+<h1>{{.Title}}</h1>
+-- about.gohtml --
+<p>{{.Name}}</p>

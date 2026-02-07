@@ -1,0 +1,48 @@
+# A shadowed template variable must not confuse resolution: the inner scope
+# has its own template, and each ExecuteTemplate call is checked against the
+# correct definition.  The outer ts parses index.gohtml (which uses .Title),
+# and the inner ts parses about.gohtml (which uses .Name).  Passing the wrong
+# data type to the inner call should produce an error only for that call.
+
+! check-templates
+stderr 'type check failed:.*about\.gohtml:1:5: executing "about\.gohtml" at <\.Name>: Name not found on example\.com/app\.IndexPage'
+! stderr 'Title not found'
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- main.go --
+package main
+
+import (
+	"embed"
+	"fmt"
+	"html/template"
+	"net/http"
+)
+
+//go:embed *.gohtml
+var source embed.FS
+
+type IndexPage struct {
+	Title string
+}
+
+var ts = template.Must(template.ParseFS(source, "index.gohtml"))
+
+func handleIndex(w http.ResponseWriter, r *http.Request) {
+	_ = ts.ExecuteTemplate(w, "index.gohtml", IndexPage{Title: "Home"})
+}
+
+func handleAbout(w http.ResponseWriter, r *http.Request) {
+	ts := template.Must(template.ParseFS(source, "about.gohtml"))
+	_ = ts.ExecuteTemplate(w, "about.gohtml", IndexPage{Title: "oops"})
+}
+
+var _ = fmt.Sprint
+
+-- index.gohtml --
+<h1>{{.Title}}</h1>
+-- about.gohtml --
+<p>{{.Name}}</p>
