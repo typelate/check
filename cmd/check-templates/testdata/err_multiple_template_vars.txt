@@ -1,0 +1,49 @@
+# Multiple template variables must not cross-contaminate: only the incorrect
+# call should produce an error.
+
+! check-templates
+stderr 'type check failed:.*about\.gohtml:1:2: executing "about\.gohtml" at <\.Name>: Name not found on example\.com/app\.IndexPage'
+! stderr 'Title not found'
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- main.go --
+package main
+
+import (
+	"embed"
+	"fmt"
+	"html/template"
+	"io"
+)
+
+//go:embed *.gohtml
+var source embed.FS
+
+var templatesA = template.Must(template.ParseFS(source, "index.gohtml"))
+var templatesB = template.Must(template.ParseFS(source, "about.gohtml"))
+
+type IndexPage struct {
+	Title string
+}
+
+type AboutPage struct {
+	Name string
+}
+
+func renderIndex() {
+	_ = templatesA.ExecuteTemplate(io.Discard, "index.gohtml", IndexPage{})
+}
+
+func renderAbout() {
+	_ = templatesB.ExecuteTemplate(io.Discard, "about.gohtml", IndexPage{})
+}
+
+var _ = fmt.Sprint
+
+-- index.gohtml --
+{{.Title}}
+-- about.gohtml --
+{{.Name}}

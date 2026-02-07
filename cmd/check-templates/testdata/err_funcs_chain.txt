@@ -1,0 +1,42 @@
+# Template constructed with Funcs() chained before ParseFS should still
+# report errors for missing fields.
+
+! check-templates
+stderr 'type check failed:.*index\.gohtml:1:2: executing "index\.gohtml" at <\.Missing>: Missing not found on example\.com/app\.Page'
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- main.go --
+package main
+
+import (
+	"embed"
+	"fmt"
+	"html/template"
+	"io"
+	"strings"
+)
+
+var (
+	//go:embed *.gohtml
+	source embed.FS
+
+	templates = template.Must(template.New("").Funcs(template.FuncMap{
+		"upper": strings.ToUpper,
+	}).ParseFS(source, "*"))
+)
+
+type Page struct {
+	Title string
+}
+
+func render() {
+	_ = templates.ExecuteTemplate(io.Discard, "index.gohtml", Page{})
+}
+
+var _ = fmt.Sprint
+
+-- index.gohtml --
+{{.Missing | upper}}

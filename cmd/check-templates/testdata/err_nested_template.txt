@@ -1,0 +1,41 @@
+# A nested template call should check the invoked template against the data type.
+
+! check-templates
+stderr 'type check failed:.*header\.gohtml:1:6: executing "header\.gohtml" at <\.Missing>: Missing not found on example\.com/app\.Page'
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- main.go --
+package main
+
+import (
+	"embed"
+	"fmt"
+	"html/template"
+	"io"
+)
+
+var (
+	//go:embed *.gohtml
+	source embed.FS
+
+	templates = template.Must(template.ParseFS(source, "*"))
+)
+
+type Page struct {
+	Title string
+}
+
+func render() {
+	_ = templates.ExecuteTemplate(io.Discard, "index.gohtml", Page{})
+}
+
+var _ = fmt.Sprint
+
+-- index.gohtml --
+{{template "header.gohtml" .}}
+<p>body</p>
+-- header.gohtml --
+<h1>{{.Missing}}</h1>

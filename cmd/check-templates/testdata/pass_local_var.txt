@@ -1,0 +1,35 @@
+# Template defined as a local variable in the same function as ExecuteTemplate.
+
+check-templates
+! stderr .
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- main.go --
+package main
+
+import (
+	"embed"
+	"fmt"
+	"html/template"
+	"net/http"
+)
+
+//go:embed *.gohtml
+var source embed.FS
+
+func handleIndex(w http.ResponseWriter, r *http.Request) {
+	ts := template.Must(template.ParseFS(source, "*"))
+	_ = ts.ExecuteTemplate(w, "index.gohtml", Page{Title: "Home"})
+}
+
+type Page struct {
+	Title string
+}
+
+var _ = fmt.Sprint
+
+-- index.gohtml --
+<h1>{{.Title}}</h1>

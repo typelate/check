@@ -1,0 +1,29 @@
+# Template constructed with Parse (not ParseFS) passes check.
+
+check-templates
+! stderr .
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- main.go --
+package main
+
+import (
+	"fmt"
+	"html/template"
+	"net/http"
+)
+
+var templates = template.Must(template.New("greeting").Parse(`<h1>Hello, {{.Name}}!</h1>`))
+
+type Greeting struct {
+	Name string
+}
+
+func handle(w http.ResponseWriter, r *http.Request) {
+	_ = templates.ExecuteTemplate(w, "greeting", Greeting{Name: "World"})
+}
+
+var _ = fmt.Sprint

@@ -1,0 +1,43 @@
+# Template defined at top level, modified in a function. The additional template
+# has a field that doesn't exist on the data type.
+
+! check-templates
+stderr 'type check failed:.*about\.gohtml:1:5: executing "about\.gohtml" at <\.Missing>: Missing not found on example\.com/app\.Page'
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- main.go --
+package main
+
+import (
+	"embed"
+	"fmt"
+	"html/template"
+	"net/http"
+)
+
+//go:embed *.gohtml
+var source embed.FS
+
+type Page struct {
+	Title string
+}
+
+var ts = template.Must(template.New("app").ParseFS(source, "index.gohtml"))
+
+func setup() {
+	template.Must(ts.ParseFS(source, "about.gohtml"))
+}
+
+func handleAbout(w http.ResponseWriter, r *http.Request) {
+	_ = ts.ExecuteTemplate(w, "about.gohtml", Page{Title: "Home"})
+}
+
+var _ = fmt.Sprint
+
+-- index.gohtml --
+<h1>{{.Title}}</h1>
+-- about.gohtml --
+<p>{{.Missing}}</p>

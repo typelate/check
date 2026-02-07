@@ -1,0 +1,47 @@
+# A shadowed template variable should resolve to the correct definition at each call site.
+
+check-templates
+! stderr .
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- main.go --
+package main
+
+import (
+	"embed"
+	"fmt"
+	"html/template"
+	"net/http"
+)
+
+//go:embed *.gohtml
+var source embed.FS
+
+type IndexPage struct {
+	Title string
+}
+
+type AboutPage struct {
+	Name string
+}
+
+var ts = template.Must(template.ParseFS(source, "index.gohtml"))
+
+func handleIndex(w http.ResponseWriter, r *http.Request) {
+	_ = ts.ExecuteTemplate(w, "index.gohtml", IndexPage{Title: "Home"})
+}
+
+func handleAbout(w http.ResponseWriter, r *http.Request) {
+	ts := template.Must(template.ParseFS(source, "about.gohtml"))
+	_ = ts.ExecuteTemplate(w, "about.gohtml", AboutPage{Name: "World"})
+}
+
+var _ = fmt.Sprint
+
+-- index.gohtml --
+<h1>{{.Title}}</h1>
+-- about.gohtml --
+<p>{{.Name}}</p>

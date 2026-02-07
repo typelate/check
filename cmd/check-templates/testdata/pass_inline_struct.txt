@@ -1,0 +1,36 @@
+# Inline anonymous struct types should be resolved correctly.
+
+check-templates
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- main.go --
+package main
+
+import (
+	"embed"
+	"fmt"
+	"html/template"
+	"io"
+)
+
+var (
+	//go:embed *.gohtml
+	source embed.FS
+
+	templates = template.Must(template.ParseFS(source, "*"))
+)
+
+func render() {
+	var data struct {
+		Title string
+	}
+	_ = templates.ExecuteTemplate(io.Discard, "index.gohtml", data)
+}
+
+var _ = fmt.Sprint
+
+-- index.gohtml --
+{{.Title}}

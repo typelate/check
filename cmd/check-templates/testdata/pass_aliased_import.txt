@@ -1,0 +1,38 @@
+# Template import with a non-standard alias should still be resolved.
+
+check-templates
+! stderr .
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- main.go --
+package main
+
+import (
+	"embed"
+	"fmt"
+	htmltpl "html/template"
+	"net/http"
+)
+
+var (
+	//go:embed *.gohtml
+	source embed.FS
+
+	templates = htmltpl.Must(htmltpl.ParseFS(source, "*"))
+)
+
+type Page struct {
+	Title string
+}
+
+func handleIndex(w http.ResponseWriter, r *http.Request) {
+	_ = templates.ExecuteTemplate(w, "index.gohtml", Page{Title: "Home"})
+}
+
+var _ = fmt.Sprint
+
+-- index.gohtml --
+<h1>{{.Title}}</h1>

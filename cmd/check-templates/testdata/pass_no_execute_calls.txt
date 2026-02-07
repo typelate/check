@@ -1,0 +1,13 @@
+# Package with no ExecuteTemplate calls passes without error.
+
+check-templates
+! stderr .
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- main.go --
+package main
+
+func main() {}

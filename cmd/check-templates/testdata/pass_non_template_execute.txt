@@ -1,0 +1,28 @@
+# A custom type with an ExecuteTemplate method should not be confused
+# with html/template. The tool should not report errors for it.
+
+check-templates
+! stderr .
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- main.go --
+package main
+
+import (
+	"io"
+	"net/http"
+)
+
+type Renderer struct{}
+
+func (r *Renderer) ExecuteTemplate(w io.Writer, name string, data any) error {
+	return nil
+}
+
+func handle(w http.ResponseWriter, r *http.Request) {
+	renderer := &Renderer{}
+	_ = renderer.ExecuteTemplate(w, "index.gohtml", struct{ Missing string }{})
+}

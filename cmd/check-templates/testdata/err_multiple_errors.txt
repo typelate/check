@@ -1,0 +1,49 @@
+# Multiple ExecuteTemplate calls can each report errors.
+
+! check-templates
+stderr 'type check failed:.*index\.gohtml:1:6: executing "index\.gohtml" at <\.Missing>: Missing not found on example\.com/app\.IndexPage'
+stderr 'type check failed:.*about\.gohtml:1:5: executing "about\.gohtml" at <\.Unknown>: Unknown not found on example\.com/app\.AboutPage'
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- main.go --
+package main
+
+import (
+	"embed"
+	"fmt"
+	"html/template"
+	"net/http"
+)
+
+var (
+	//go:embed *.gohtml
+	source embed.FS
+
+	templates = template.Must(template.ParseFS(source, "*"))
+)
+
+type IndexPage struct {
+	Title string
+}
+
+type AboutPage struct {
+	Name string
+}
+
+func handleIndex(w http.ResponseWriter, r *http.Request) {
+	_ = templates.ExecuteTemplate(w, "index.gohtml", IndexPage{Title: "Home"})
+}
+
+func handleAbout(w http.ResponseWriter, r *http.Request) {
+	_ = templates.ExecuteTemplate(w, "about.gohtml", AboutPage{Name: "World"})
+}
+
+var _ = fmt.Sprint
+
+-- index.gohtml --
+<h1>{{.Missing}}</h1>
+-- about.gohtml --
+<p>{{.Unknown}}</p>
