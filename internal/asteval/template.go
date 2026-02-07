@@ -38,7 +38,7 @@ func EvaluateTemplateSelector(ts *template.Template, pkg *types.Package, typesIn
 	default:
 		return nil, lDelim, rDelim, wrapWithFilename(workingDirectory, fileSet, sel.X.Pos(), fmt.Errorf("expected exactly one argument %s got %d", astgen.Format(sel.X), len(call.Args)))
 	case *ast.Ident:
-		if !isTemplatePkgIdent(typesInfo, x) {
+		if !IsTemplatePkgIdent(typesInfo, x) {
 			if ts == nil {
 				return nil, lDelim, rDelim, wrapWithFilename(workingDirectory, fileSet, sel.X.Pos(), fmt.Errorf("expected template package got %s", astgen.Format(sel.X)))
 			}
@@ -187,9 +187,9 @@ func EvaluateTemplateSelector(ts *template.Template, pkg *types.Package, typesIn
 	}
 }
 
-// isTemplatePkgIdent reports whether ident refers to the "html/template"
+// IsTemplatePkgIdent reports whether ident refers to the "html/template"
 // or "text/template" package via the type checker.
-func isTemplatePkgIdent(info *types.Info, ident *ast.Ident) bool {
+func IsTemplatePkgIdent(info *types.Info, ident *ast.Ident) bool {
 	if info == nil {
 		return false
 	}
@@ -200,6 +200,52 @@ func isTemplatePkgIdent(info *types.Info, ident *ast.Ident) bool {
 	}
 	path := pkgName.Imported().Path()
 	return path == "html/template" || path == "text/template"
+}
+
+// IsTemplateMethod reports whether sel refers to a method on
+// *html/template.Template or *text/template.Template.
+func IsTemplateMethod(typesInfo *types.Info, sel *ast.SelectorExpr) bool {
+	if typesInfo == nil {
+		return false
+	}
+	selection, ok := typesInfo.Selections[sel]
+	if !ok {
+		return false
+	}
+	fn, ok := selection.Obj().(*types.Func)
+	if !ok {
+		return false
+	}
+	fnPkg := fn.Pkg()
+	if fnPkg == nil {
+		return false
+	}
+	return fnPkg.Path() == "html/template" || fnPkg.Path() == "text/template"
+}
+
+// FindModificationReceiver unwraps template.Must and returns the types.Object
+// of the variable receiver for a method call like ts.ParseFS(...) or
+// template.Must(ts.ParseFS(...)). Returns nil if no variable receiver is found.
+func FindModificationReceiver(expr *ast.CallExpr, typesInfo *types.Info) types.Object {
+	sel, ok := expr.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return nil
+	}
+	switch x := sel.X.(type) {
+	case *ast.Ident:
+		if IsTemplatePkgIdent(typesInfo, x) && sel.Sel.Name == "Must" && len(expr.Args) == 1 {
+			inner, ok := expr.Args[0].(*ast.CallExpr)
+			if !ok {
+				return nil
+			}
+			return FindModificationReceiver(inner, typesInfo)
+		}
+		if IsTemplatePkgIdent(typesInfo, x) {
+			return nil
+		}
+		return typesInfo.Uses[x]
+	}
+	return nil
 }
 
 func builtins() template.FuncMap {

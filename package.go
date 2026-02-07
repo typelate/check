@@ -7,6 +7,7 @@ import (
 	"go/token"
 	"go/types"
 	"html/template"
+	"path/filepath"
 
 	"golang.org/x/tools/go/packages"
 
@@ -14,18 +15,36 @@ import (
 	"github.com/typelate/check/internal/astgen"
 )
 
+type pendingCall struct {
+	receiverObj  types.Object
+	templateName string
+	dataType     types.Type
+}
+
+type resolvedTemplate struct {
+	templates *template.Template
+	functions asteval.TemplateFunctions
+	metadata  *asteval.TemplateMetadata
+}
+
 // Package discovers all .ExecuteTemplate calls in the given package,
 // resolves receiver variables to their template construction chains,
 // and type-checks each call.
 //
 // ExecuteTemplate must be called with a string literal for the second parameter.
 func Package(pkg *packages.Package) error {
-	// Phase 1: Find all ExecuteTemplate calls and collect receiver objects.
-	type pendingCall struct {
-		receiverObj  types.Object
-		templateName string
-		dataType     types.Type
+	pending, receivers := findExecuteCalls(pkg)
+	resolved, err := resolveTemplates(pkg, receivers)
+	if err != nil {
+		return err
 	}
+	return checkCalls(pkg, pending, resolved)
+}
+
+// findExecuteCalls walks the package syntax looking for ExecuteTemplate calls
+// and returns the pending calls along with the set of receiver objects that
+// need template resolution.
+func findExecuteCalls(pkg *packages.Package) ([]pendingCall, map[types.Object]struct{}) {
 	var pending []pendingCall
 	receiverSet := make(map[types.Object]struct{})
 
@@ -40,7 +59,7 @@ func Package(pkg *packages.Package) error {
 				return true
 			}
 			// Verify the method belongs to html/template or text/template.
-			if !isTemplateMethod(pkg.TypesInfo, sel) {
+			if !asteval.IsTemplateMethod(pkg.TypesInfo, sel) {
 				return true
 			}
 			receiverIdent, ok := sel.X.(*ast.Ident)
@@ -66,84 +85,49 @@ func Package(pkg *packages.Package) error {
 		})
 	}
 
-	// Phase 2: Resolve each unique receiver object to its template construction chain.
-	type resolvedTemplate struct {
-		ts    *template.Template
-		funcs asteval.TemplateFunctions
-		meta  *asteval.TemplateMetadata
-	}
+	return pending, receiverSet
+}
+
+// resolveTemplates resolves each unique receiver object to its template
+// construction chain, including additional ParseFS/Parse modifications.
+func resolveTemplates(pkg *packages.Package, receivers map[types.Object]struct{}) (map[types.Object]*resolvedTemplate, error) {
 	resolved := make(map[types.Object]*resolvedTemplate)
 
 	workingDirectory := packageDirectory(pkg)
 	embeddedPaths, err := asteval.RelativeFilePaths(workingDirectory, pkg.EmbedFiles...)
 	if err != nil {
-		return fmt.Errorf("failed to calculate relative path for embedded files: %w", err)
+		return nil, fmt.Errorf("failed to calculate relative path for embedded files: %w", err)
 	}
 
-	resolveValueSpec := func(tv *ast.ValueSpec) {
-		for i, name := range tv.Names {
-			if i >= len(tv.Values) {
-				continue
-			}
-			obj := pkg.TypesInfo.Defs[name]
-			if obj == nil {
-				continue
-			}
-			if _, needed := receiverSet[obj]; !needed {
-				continue
-			}
-
-			funcTypeMap := asteval.DefaultFunctions(pkg.Types)
-			meta := &asteval.TemplateMetadata{}
-			ts, _, _, err := asteval.EvaluateTemplateSelector(nil, pkg.Types, pkg.TypesInfo, tv.Values[i], workingDirectory, name.Name, "", "", pkg.Fset, pkg.Syntax, embeddedPaths, funcTypeMap, make(template.FuncMap), meta)
-			if err != nil {
-				return
-			}
-			resolved[obj] = &resolvedTemplate{
-				ts:    ts,
-				funcs: funcTypeMap,
-				meta:  meta,
-			}
-		}
-	}
-
-	resolveAssignStmt := func(stmt *ast.AssignStmt) {
-		if stmt.Tok != token.DEFINE {
+	resolveExpr := func(obj types.Object, name string, expr ast.Expr) {
+		if _, needed := receivers[obj]; !needed {
 			return
 		}
-		for i, lhs := range stmt.Lhs {
-			if i >= len(stmt.Rhs) {
-				continue
-			}
-			ident, ok := lhs.(*ast.Ident)
-			if !ok {
+		funcTypeMap := asteval.DefaultFunctions(pkg.Types)
+		meta := &asteval.TemplateMetadata{}
+		ts, _, _, err := asteval.EvaluateTemplateSelector(nil, pkg.Types, pkg.TypesInfo, expr, workingDirectory, name, "", "", pkg.Fset, pkg.Syntax, embeddedPaths, funcTypeMap, make(template.FuncMap), meta)
+		if err != nil {
+			return
+		}
+		resolved[obj] = &resolvedTemplate{
+			templates: ts,
+			functions: funcTypeMap,
+			metadata:  meta,
+		}
+	}
+
+	// Resolve top-level var declarations.
+	for _, tv := range astgen.IterateValueSpecs(pkg.Syntax) {
+		for i, ident := range tv.Names {
+			if i >= len(tv.Values) {
 				continue
 			}
 			obj := pkg.TypesInfo.Defs[ident]
 			if obj == nil {
 				continue
 			}
-			if _, needed := receiverSet[obj]; !needed {
-				continue
-			}
-
-			funcTypeMap := asteval.DefaultFunctions(pkg.Types)
-			meta := &asteval.TemplateMetadata{}
-			ts, _, _, err := asteval.EvaluateTemplateSelector(nil, pkg.Types, pkg.TypesInfo, stmt.Rhs[i], workingDirectory, ident.Name, "", "", pkg.Fset, pkg.Syntax, embeddedPaths, funcTypeMap, make(template.FuncMap), meta)
-			if err != nil {
-				return
-			}
-			resolved[obj] = &resolvedTemplate{
-				ts:    ts,
-				funcs: funcTypeMap,
-				meta:  meta,
-			}
+			resolveExpr(obj, ident.Name, tv.Values[i])
 		}
-	}
-
-	// Resolve top-level var declarations.
-	for _, tv := range astgen.IterateValueSpecs(pkg.Syntax) {
-		resolveValueSpec(tv)
 	}
 
 	// Resolve function-local var declarations and short variable declarations.
@@ -160,23 +144,48 @@ func Package(pkg *packages.Package) error {
 					if !ok {
 						continue
 					}
-					resolveValueSpec(vs)
+					for i, ident := range vs.Names {
+						if i >= len(vs.Values) {
+							continue
+						}
+						obj := pkg.TypesInfo.Defs[ident]
+						if obj == nil {
+							continue
+						}
+						resolveExpr(obj, ident.Name, vs.Values[i])
+					}
 				}
 			case *ast.AssignStmt:
-				resolveAssignStmt(n)
+				if n.Tok != token.DEFINE {
+					return true
+				}
+				for i, lhs := range n.Lhs {
+					if i >= len(n.Rhs) {
+						continue
+					}
+					ident, ok := lhs.(*ast.Ident)
+					if !ok {
+						continue
+					}
+					obj := pkg.TypesInfo.Defs[ident]
+					if obj == nil {
+						continue
+					}
+					resolveExpr(obj, ident.Name, n.Rhs[i])
+				}
 			}
 			return true
 		})
 	}
 
-	// Phase 2b: Find additional ParseFS/Parse calls on resolved template variables.
+	// Find additional ParseFS/Parse calls on resolved template variables.
 	for _, file := range pkg.Syntax {
 		ast.Inspect(file, func(node ast.Node) bool {
 			call, ok := node.(*ast.CallExpr)
 			if !ok {
 				return true
 			}
-			obj := findModificationReceiver(call, pkg.TypesInfo)
+			obj := asteval.FindModificationReceiver(call, pkg.TypesInfo)
 			if obj == nil {
 				return true
 			}
@@ -185,24 +194,29 @@ func Package(pkg *packages.Package) error {
 				return true
 			}
 			meta := &asteval.TemplateMetadata{}
-			ts, _, _, err := asteval.EvaluateTemplateSelector(rt.ts, pkg.Types, pkg.TypesInfo, call, workingDirectory, "", "", "", pkg.Fset, pkg.Syntax, embeddedPaths, rt.funcs, make(template.FuncMap), meta)
+			ts, _, _, err := asteval.EvaluateTemplateSelector(rt.templates, pkg.Types, pkg.TypesInfo, call, workingDirectory, "", "", "", pkg.Fset, pkg.Syntax, embeddedPaths, rt.functions, make(template.FuncMap), meta)
 			if err != nil {
 				return true
 			}
-			rt.ts = ts
-			rt.meta.EmbedFilePaths = append(rt.meta.EmbedFilePaths, meta.EmbedFilePaths...)
-			rt.meta.ParseCalls = append(rt.meta.ParseCalls, meta.ParseCalls...)
+			rt.templates = ts
+			rt.metadata.EmbedFilePaths = append(rt.metadata.EmbedFilePaths, meta.EmbedFilePaths...)
+			rt.metadata.ParseCalls = append(rt.metadata.ParseCalls, meta.ParseCalls...)
 			return true
 		})
 	}
 
-	// Phase 3: Type-check each ExecuteTemplate call.
+	return resolved, nil
+}
+
+// checkCalls type-checks each pending ExecuteTemplate call against its
+// resolved template.
+func checkCalls(pkg *packages.Package, pending []pendingCall, resolved map[types.Object]*resolvedTemplate) error {
 	mergedFunctions := make(Functions)
 	if pkg.Types != nil {
 		mergedFunctions = DefaultFunctions(pkg.Types)
 	}
 	for _, rt := range resolved {
-		for name, sig := range rt.funcs {
+		for name, sig := range rt.functions {
 			mergedFunctions[name] = sig
 		}
 	}
@@ -213,11 +227,11 @@ func Package(pkg *packages.Package) error {
 		if !ok {
 			continue
 		}
-		looked := rt.ts.Lookup(p.templateName)
+		looked := rt.templates.Lookup(p.templateName)
 		if looked == nil {
 			continue
 		}
-		treeFinder := (*asteval.Forrest)(rt.ts)
+		treeFinder := (*asteval.Forrest)(rt.templates)
 		global := NewGlobal(pkg.Types, pkg.Fset, treeFinder, mergedFunctions)
 		if err := Execute(global, looked.Tree, p.dataType); err != nil {
 			errs = append(errs, err)
@@ -227,75 +241,9 @@ func Package(pkg *packages.Package) error {
 	return errors.Join(errs...)
 }
 
-// isTemplateMethod reports whether sel refers to a method on
-// *html/template.Template or *text/template.Template.
-func isTemplateMethod(typesInfo *types.Info, sel *ast.SelectorExpr) bool {
-	if typesInfo == nil {
-		return false
-	}
-	selection, ok := typesInfo.Selections[sel]
-	if !ok {
-		return false
-	}
-	fn, ok := selection.Obj().(*types.Func)
-	if !ok {
-		return false
-	}
-	fnPkg := fn.Pkg()
-	if fnPkg == nil {
-		return false
-	}
-	return fnPkg.Path() == "html/template" || fnPkg.Path() == "text/template"
-}
-
-// findModificationReceiver unwraps template.Must and returns the types.Object
-// of the variable receiver for a method call like ts.ParseFS(...) or
-// template.Must(ts.ParseFS(...)). Returns nil if no variable receiver is found.
-func findModificationReceiver(expr *ast.CallExpr, typesInfo *types.Info) types.Object {
-	sel, ok := expr.Fun.(*ast.SelectorExpr)
-	if !ok {
-		return nil
-	}
-	switch x := sel.X.(type) {
-	case *ast.Ident:
-		if isTemplatePkgIdent(typesInfo, x) && sel.Sel.Name == "Must" && len(expr.Args) == 1 {
-			inner, ok := expr.Args[0].(*ast.CallExpr)
-			if !ok {
-				return nil
-			}
-			return findModificationReceiver(inner, typesInfo)
-		}
-		if isTemplatePkgIdent(typesInfo, x) {
-			return nil
-		}
-		return typesInfo.Uses[x]
-	}
-	return nil
-}
-
-// isTemplatePkgIdent reports whether ident refers to the "html/template"
-// or "text/template" package via the type checker.
-func isTemplatePkgIdent(typesInfo *types.Info, ident *ast.Ident) bool {
-	if typesInfo == nil {
-		return false
-	}
-	obj := typesInfo.Uses[ident]
-	pkgName, ok := obj.(*types.PkgName)
-	if !ok {
-		return false
-	}
-	path := pkgName.Imported().Path()
-	return path == "html/template" || path == "text/template"
-}
-
 func packageDirectory(pkg *packages.Package) string {
 	if len(pkg.GoFiles) > 0 {
-		p := pkg.GoFiles[0]
-		for i := len(p) - 1; i >= 0; i-- {
-			if p[i] == '/' || p[i] == '\\' {
-				return p[:i]
-			}
-		}
+		return filepath.Dir(pkg.GoFiles[0])
 	}
 	return "."
 }
