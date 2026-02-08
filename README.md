@@ -28,6 +28,5 @@ Call `Execute` with a `types.Type` for the template's data (`.`) and the templat
 ## Limitations
 
 1. You must provide a `types.Type` for the template's root context (`.`).
-2. Default functions do not yet differentiate between `text/template` and `html/template` built-ins.
-3. No support for third-party template packages (e.g. [safehtml](https://pkg.go.dev/github.com/google/safehtml)).
-4. Cannot detect runtime conditions such as out-of-range indexes or errors from boxed types.
+2. No support for third-party template packages (e.g. [safehtml](https://pkg.go.dev/github.com/google/safehtml)).
+3. Cannot detect runtime conditions such as out-of-range indexes or errors from boxed types.
