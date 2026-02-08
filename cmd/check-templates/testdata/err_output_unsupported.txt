@@ -1,0 +1,29 @@
+# An unsupported -o format produces an error.
+
+! check-templates -o xml
+stderr 'unsupported output format: xml'
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- main.go --
+package main
+
+import (
+	"fmt"
+	"html/template"
+	"net/http"
+)
+
+var templates = template.Must(template.New("page").Parse(`<h1>{{.Title}}</h1>`))
+
+type Page struct {
+	Title string
+}
+
+func handle(w http.ResponseWriter, r *http.Request) {
+	_ = templates.ExecuteTemplate(w, "page", Page{Title: "Home"})
+}
+
+var _ = fmt.Sprint
