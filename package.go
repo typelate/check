@@ -7,6 +7,7 @@ import (
 	"go/token"
 	"go/types"
 	"path/filepath"
+	"text/template/parse"
 
 	"golang.org/x/tools/go/packages"
 
@@ -15,6 +16,7 @@ import (
 )
 
 type pendingCall struct {
+	call         *ast.CallExpr
 	receiverObj  types.Object
 	templateName string
 	dataType     types.Type
@@ -26,15 +28,17 @@ type resolvedTemplate struct {
 	metadata  *asteval.TemplateMetadata
 }
 
+type ExecuteTemplateNodeInspectorFunc func(node *ast.CallExpr, t *parse.Tree, tp types.Type)
+
 // Package discovers all .ExecuteTemplate calls in the given package,
 // resolves receiver variables to their template construction chains,
 // and type-checks each call.
 //
 // ExecuteTemplate must be called with a string literal for the second parameter.
-func Package(pkg *packages.Package) error {
+func Package(pkg *packages.Package, inspectCall ExecuteTemplateNodeInspectorFunc, inspectTemplate TemplateNodeInspectorFunc) error {
 	pending, receivers := findExecuteCalls(pkg)
 	resolved, resolveErrs := resolveTemplates(pkg, receivers)
-	callErr := checkCalls(pkg, pending, resolved)
+	callErr := checkCalls(pkg, pending, resolved, inspectCall, inspectTemplate)
 	return errors.Join(append(resolveErrs, callErr)...)
 }
 
@@ -73,6 +77,7 @@ func findExecuteCalls(pkg *packages.Package) ([]pendingCall, map[types.Object]st
 			}
 			dataType := pkg.TypesInfo.TypeOf(call.Args[2])
 			pending = append(pending, pendingCall{
+				call:         call,
 				receiverObj:  obj,
 				templateName: templateName,
 				dataType:     dataType,
@@ -210,7 +215,7 @@ func resolveTemplates(pkg *packages.Package, receivers map[types.Object]struct{}
 
 // checkCalls type-checks each pending ExecuteTemplate call against its
 // resolved template.
-func checkCalls(pkg *packages.Package, pending []pendingCall, resolved map[types.Object]*resolvedTemplate) error {
+func checkCalls(pkg *packages.Package, pending []pendingCall, resolved map[types.Object]*resolvedTemplate, inspectCall ExecuteTemplateNodeInspectorFunc, inspectTemplate TemplateNodeInspectorFunc) error {
 	mergedFunctions := make(Functions)
 	if pkg.Types != nil {
 		mergedFunctions = DefaultFunctions(pkg.Types)
@@ -232,6 +237,10 @@ func checkCalls(pkg *packages.Package, pending []pendingCall, resolved map[types
 			continue
 		}
 		global := NewGlobal(pkg.Types, pkg.Fset, rt.templates, mergedFunctions)
+		global.InspectTemplateNode = inspectTemplate
+		if inspectCall != nil {
+			inspectCall(p.call, looked.Tree(), p.dataType)
+		}
 		if err := Execute(global, looked.Tree(), p.dataType); err != nil {
 			errs = append(errs, err)
 		}

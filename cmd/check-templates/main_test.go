@@ -25,11 +25,7 @@ func checkTemplatesCommand() script.Cmd {
 	}, func(state *script.State, args ...string) (script.WaitFunc, error) {
 		return func(state *script.State) (string, string, error) {
 			var stdout, stderr bytes.Buffer
-			cmdArgs := args
-			if len(cmdArgs) == 0 {
-				cmdArgs = []string{state.Getwd()}
-			}
-			code := run(cmdArgs, &stdout, &stderr)
+			code := run(state.Getwd(), args, &stdout, &stderr)
 			var err error
 			if code != 0 {
 				err = script.ErrUsage

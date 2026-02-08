@@ -51,6 +51,7 @@ type Global struct {
 	typeNodeMapping TypeNodeMapping
 
 	InspectTemplateNode TemplateNodeInspectorFunc
+	InspectCallNode     ExecuteTemplateNodeInspectorFunc
 
 	// Qualifier controls how types are printed in error messages.
 	// If nil, types are printed with their full package path.
@@ -58,7 +59,7 @@ type Global struct {
 	Qualifier types.Qualifier
 }
 
-type TemplateNodeInspectorFunc func(t *parse.Tree, node *parse.TemplateNode, tp types.Type)
+type TemplateNodeInspectorFunc func(node *parse.TemplateNode, t *parse.Tree, tp types.Type)
 
 func NewGlobal(pkg *types.Package, fileSet *token.FileSet, trees TreeFinder, fnChecker CallChecker) *Global {
 	return &Global{
@@ -295,7 +296,7 @@ func (s *scope) checkTemplateNode(tree *parse.Tree, dot types.Type, n *parse.Tem
 		x = types.Typ[types.UntypedNil]
 	}
 	if fn := s.global.InspectTemplateNode; fn != nil {
-		fn(tree, n, x)
+		fn(n, tree, x)
 	}
 	childTree, ok := s.global.trees.FindTree(n.Name)
 	if !ok {
