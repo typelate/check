@@ -1,52 +1,33 @@
 # Check [![Go Reference](https://pkg.go.dev/badge/github.com/typelate/check.svg)](https://pkg.go.dev/github.com/typelate/check)
 
-**Check** is a Go library for statically type-checking `text/template` and `html/template`. It helps catch template/type mismatches early, making refactoring safer when changing types or templates.
+**Check** is a Go library for statically type-checking `text/template` and `html/template`. It catches template/type mismatches early, making refactoring safer when changing types or templates.
 
-To use it, call `Execute` and provide:
-- a `types.Type` for the template’s data (`.`), and
-- the template’s `parse.Tree`.
+## `check-templates` CLI
 
-See [example_test.go](./example_test.go) for a working example.
+If all your `ExecuteTemplate` calls use a string literal for the template name and a static type for the data argument, you can use the CLI directly:
 
-Originally built as part of [`muxt`](https://github.com/crhntr/muxt), this package also powers the `muxt check` CLI command. If you only need command-line checks, use `muxt check` directly.
-Unlike `muxt`, which requires templates to be defined as global variables, this package lets you map templates to data parameters more flexibly (at the cost of some verbosity).
+```sh
+go get -tool github.com/typelate/check/cmd/check-templates
+go tool check-templates ./...
+```
 
-If all your calls of `ExecuteTemplate` use a string literal for the template name and a static type parameter, you can use `go tool check-templates` by installing `go get -tool github.com/typelate/check/cmd/check-templates`.
+Flags:
+- `-v` &mdash; list each call with position, template name, and data type
+- `-C dir` &mdash; change working directory before loading packages
+- `-o format` &mdash; output format: `tsv` (default) or `jsonl`
 
-For a more robust and easier-to-configure alternative, consider [jba/templatecheck](https://github.com/jba/templatecheck).
+## Library usage
 
-## Key Types and Functions
+Call `Execute` with a `types.Type` for the template's data (`.`) and the template's `parse.Tree`. See [example_test.go](./example_test.go) for a working example.
 
-* **`Global`**
-  Holds type and template resolution state. Constructed with `NewGlobal`.
+## Related projects
 
-* **`Execute`**
-  Entry point to validate a template tree against a given `types.Type`.
-
-* **`TreeFinder` / `FindTreeFunc`**
-  Resolves other templates by name (wrapping `Template.Lookup`).
-
-* **`Functions`**
-  A set of callable template functions. Implements `CallChecker`.
-
-   * Use `DefaultFunctions(pkg *types.Package)` to get the standard built-ins.
-   * Extend with `Functions.Add`.
-
-* **`CallChecker`**
-  Interface for validating function calls within templates.
+- [`muxt`](https://github.com/typelate/muxt) &mdash; builds on this library to type-check templates wired to HTTP handlers. If you only need command-line checks, `muxt check` works too.
+- [jba/templatecheck](https://github.com/jba/templatecheck) &mdash; a more mature alternative for template type-checking.
 
 ## Limitations
 
-1. **Type required**
-   You must provide a `types.Type` that represents the template’s root context (`.`).
-
-2. **Function sets**
-   Currently, default functions do not differentiate between `text/template` and `html/template`.
-
-3. **Third-party template packages**
-   Compatibility with specialized template libraries (e.g. [safehtml](https://pkg.go.dev/github.com/google/safehtml)) has no implementation.
-
-4. **Runtime-only errors**
-   `Execute` checks static type consistency but cannot detect runtime conditions such as out-of-range indexes.
-   The standard library will try to dereference boxed types that may contain any type.
-   Errors introduced by changes on a boxed type can not be caught by this package.  
+1. You must provide a `types.Type` for the template's root context (`.`).
+2. Default functions do not yet differentiate between `text/template` and `html/template` built-ins.
+3. No support for third-party template packages (e.g. [safehtml](https://pkg.go.dev/github.com/google/safehtml)).
+4. Cannot detect runtime conditions such as out-of-range indexes or errors from boxed types.
