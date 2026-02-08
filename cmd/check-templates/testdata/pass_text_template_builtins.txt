@@ -1,0 +1,28 @@
+# text/template builtin functions js, html, and urlquery should work.
+
+check-templates
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- main.go --
+package main
+
+import (
+	"fmt"
+	"io"
+	"text/template"
+)
+
+var templates = template.Must(template.New("page").Parse(`<p>{{.Title | html}}</p><script>var t = {{.Title | js}};</script><a href="?q={{.Title | urlquery}}">link</a>`))
+
+type Page struct {
+	Title string
+}
+
+func render() {
+	_ = templates.ExecuteTemplate(io.Discard, "page", Page{Title: "Hello"})
+}
+
+var _ = fmt.Sprint

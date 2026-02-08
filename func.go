@@ -9,7 +9,8 @@ import (
 
 type Functions map[string]*types.Signature
 
-// DefaultFunctions returns the standard functions defined in both html/template and text/template.
+// DefaultFunctions returns the standard functions defined in html/template and text/template.
+// It looks up escape functions (js, html, urlquery) from whichever template package is imported.
 func DefaultFunctions(pkg *types.Package) Functions {
 	fns := make(map[string]*types.Signature)
 	for pn, idents := range map[string]map[string]string{
@@ -23,11 +24,11 @@ func DefaultFunctions(pkg *types.Package) Functions {
 			"URLQueryEscaper": "urlquery",
 			"HTMLEscaper":     "html",
 		},
-		//"text/template": {
-		//	"JSEscaper":       "js",
-		//	"URLQueryEscaper": "urlquery",
-		//	"HTMLEscaper":     "html",
-		//},
+		"text/template": {
+			"JSEscaper":       "js",
+			"URLQueryEscaper": "urlquery",
+			"HTMLEscaper":     "html",
+		},
 	} {
 		if p, ok := findPackage(pkg, pn); ok && p != nil {
 			for funcIdent, templateFunc := range idents {
