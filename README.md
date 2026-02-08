@@ -11,6 +11,8 @@ See [example_test.go](./example_test.go) for a working example.
 Originally built as part of [`muxt`](https://github.com/crhntr/muxt), this package also powers the `muxt check` CLI command. If you only need command-line checks, use `muxt check` directly.
 Unlike `muxt`, which requires templates to be defined as global variables, this package lets you map templates to data parameters more flexibly (at the cost of some verbosity).
 
+If all your calls of `ExecuteTemplate` use a string literal for the template name and a static type parameter, you can use `go tool check-templates` by installing `go get -tool github.com/typelate/check/cmd/check-templates`.
+
 For a more robust and easier-to-configure alternative, consider [jba/templatecheck](https://github.com/jba/templatecheck).
 
 ## Key Types and Functions
@@ -42,7 +44,7 @@ For a more robust and easier-to-configure alternative, consider [jba/templateche
    Currently, default functions do not differentiate between `text/template` and `html/template`.
 
 3. **Third-party template packages**
-   Compatibility with specialized template libraries (e.g. [safehtml](https://pkg.go.dev/github.com/google/safehtml)) has not been fully tested.
+   Compatibility with specialized template libraries (e.g. [safehtml](https://pkg.go.dev/github.com/google/safehtml)) has no implementation.
 
 4. **Runtime-only errors**
    `Execute` checks static type consistency but cannot detect runtime conditions such as out-of-range indexes.

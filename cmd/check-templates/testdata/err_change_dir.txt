@@ -1,0 +1,29 @@
+# The -C flag changes directory; type errors in that directory are still caught.
+
+! check-templates -C $WORK/subdir
+stderr 'Missing not found on example\.com/app\.Page'
+
+-- subdir/go.mod --
+module example.com/app
+
+go 1.25.0
+-- subdir/main.go --
+package main
+
+import (
+	"fmt"
+	"html/template"
+	"net/http"
+)
+
+var templates = template.Must(template.New("page").Parse(`<h1>{{.Missing}}</h1>`))
+
+type Page struct {
+	Title string
+}
+
+func handle(w http.ResponseWriter, r *http.Request) {
+	_ = templates.ExecuteTemplate(w, "page", Page{Title: "Home"})
+}
+
+var _ = fmt.Sprint
