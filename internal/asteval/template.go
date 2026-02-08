@@ -7,7 +7,6 @@ import (
 	"go/format"
 	"go/token"
 	"go/types"
-	"html/template"
 	"os"
 	"path/filepath"
 	"slices"
@@ -19,13 +18,28 @@ import (
 	"github.com/typelate/check/internal/astgen"
 )
 
+// Template abstracts over html/template.Template and text/template.Template
+// so that the correct template package is used based on the user's import.
+type Template interface {
+	New(name string) Template
+	Parse(text string) (Template, error)
+	Funcs(funcMap map[string]any) Template
+	Option(opt ...string) Template
+	Delims(left, right string) Template
+	Lookup(name string) Template
+	Name() string
+	AddParseTree(name string, tree *parse.Tree) (Template, error)
+	Tree() *parse.Tree
+	FindTree(name string) (*parse.Tree, bool)
+}
+
 // TemplateMetadata accumulates metadata during template evaluation.
 type TemplateMetadata struct {
 	EmbedFilePaths []string
 	ParseCalls     []*ast.BasicLit
 }
 
-func EvaluateTemplateSelector(ts *template.Template, pkg *types.Package, typesInfo *types.Info, expression ast.Expr, workingDirectory, templatesVariable, rDelim, lDelim string, fileSet *token.FileSet, files []*ast.File, embeddedPaths []string, funcTypeMaps TemplateFunctions, fm template.FuncMap, meta *TemplateMetadata) (*template.Template, string, string, error) {
+func EvaluateTemplateSelector(ts Template, pkg *types.Package, typesInfo *types.Info, expression ast.Expr, workingDirectory, templatesVariable, rDelim, lDelim string, fileSet *token.FileSet, files []*ast.File, embeddedPaths []string, funcTypeMaps TemplateFunctions, fm map[string]any, meta *TemplateMetadata) (Template, string, string, error) {
 	call, ok := expression.(*ast.CallExpr)
 	if !ok {
 		return nil, lDelim, rDelim, wrapWithFilename(workingDirectory, fileSet, expression.Pos(), fmt.Errorf("expected call expression"))
@@ -52,7 +66,8 @@ func EvaluateTemplateSelector(ts *template.Template, pkg *types.Package, typesIn
 				if meta != nil {
 					meta.EmbedFilePaths = append(meta.EmbedFilePaths, filePaths...)
 				}
-				t, err := parseFiles(ts, fm, lDelim, rDelim, filePaths...)
+				pkgPath := templatePkgPath(typesInfo, x)
+				t, err := parseFiles(ts, pkgPath, fm, lDelim, rDelim, filePaths...)
 				return t, lDelim, rDelim, err
 			case "Parse":
 				if len(call.Args) != 1 {
@@ -93,6 +108,7 @@ func EvaluateTemplateSelector(ts *template.Template, pkg *types.Package, typesIn
 				return nil, lDelim, rDelim, wrapWithFilename(workingDirectory, fileSet, call.Fun.Pos(), fmt.Errorf("unsupported method %s on variable receiver", sel.Sel.Name))
 			}
 		}
+		pkgPath := templatePkgPath(typesInfo, x)
 		switch sel.Sel.Name {
 		case "Must":
 			if len(call.Args) != 1 {
@@ -107,7 +123,7 @@ func EvaluateTemplateSelector(ts *template.Template, pkg *types.Package, typesIn
 			if err != nil {
 				return nil, lDelim, rDelim, err
 			}
-			return template.New(templateNames[0]), lDelim, rDelim, nil
+			return NewTemplate(pkgPath, templateNames[0]), lDelim, rDelim, nil
 		case "ParseFS":
 			filePaths, err := evaluateCallParseFilesArgs(workingDirectory, fileSet, call, files, embeddedPaths)
 			if err != nil {
@@ -116,7 +132,7 @@ func EvaluateTemplateSelector(ts *template.Template, pkg *types.Package, typesIn
 			if meta != nil {
 				meta.EmbedFilePaths = append(meta.EmbedFilePaths, filePaths...)
 			}
-			t, err := parseFiles(nil, fm, lDelim, rDelim, filePaths...)
+			t, err := parseFiles(nil, pkgPath, fm, lDelim, rDelim, filePaths...)
 			return t, lDelim, rDelim, err
 		default:
 			return nil, lDelim, rDelim, wrapWithFilename(workingDirectory, fileSet, call.Fun.Pos(), fmt.Errorf("unsupported function %s", sel.Sel.Name))
@@ -168,7 +184,7 @@ func EvaluateTemplateSelector(ts *template.Template, pkg *types.Package, typesIn
 			if meta != nil {
 				meta.EmbedFilePaths = append(meta.EmbedFilePaths, filePaths...)
 			}
-			t, err := parseFiles(up, fm, upLDelim, upRDelim, filePaths...)
+			t, err := parseFiles(up, "", fm, upLDelim, upRDelim, filePaths...)
 			return t, upLDelim, upRDelim, err
 		case "Option":
 			list, err := StringLiteralExpressionList(workingDirectory, fileSet, call.Args)
@@ -185,6 +201,20 @@ func EvaluateTemplateSelector(ts *template.Template, pkg *types.Package, typesIn
 			return nil, upLDelim, upRDelim, wrapWithFilename(workingDirectory, fileSet, call.Fun.Pos(), fmt.Errorf("unsupported method %s", sel.Sel.Name))
 		}
 	}
+}
+
+// templatePkgPath extracts the import path ("html/template" or "text/template")
+// from an AST identifier that refers to a template package.
+func templatePkgPath(info *types.Info, ident *ast.Ident) string {
+	if info == nil {
+		return "html/template"
+	}
+	obj := info.Uses[ident]
+	pkgName, ok := obj.(*types.PkgName)
+	if !ok {
+		return "html/template"
+	}
+	return pkgName.Imported().Path()
 }
 
 // IsTemplatePkgIdent reports whether ident refers to the "html/template"
@@ -248,9 +278,9 @@ func FindModificationReceiver(expr *ast.CallExpr, typesInfo *types.Info) types.O
 	return nil
 }
 
-func builtins() template.FuncMap {
+func builtins() map[string]any {
 	type nothing struct{}
-	return template.FuncMap{
+	return map[string]any{
 		"and":      func() (_ nothing) { return },
 		"call":     func() (_ nothing) { return },
 		"html":     func() (_ nothing) { return },
@@ -275,9 +305,9 @@ func builtins() template.FuncMap {
 	}
 }
 
-func parseFiles(t *template.Template, fm template.FuncMap, leftDelim, rightDelim string, filenames ...string) (*template.Template, error) {
+func parseFiles(t Template, pkgPath string, fm map[string]any, leftDelim, rightDelim string, filenames ...string) (Template, error) {
 	if len(filenames) == 0 {
-		return nil, fmt.Errorf("html/template: no files named in call to ParseFiles")
+		return nil, fmt.Errorf("template: no files named in call to ParseFiles")
 	}
 	for _, filename := range filenames {
 		templateName := filepath.Base(filename)
@@ -286,9 +316,9 @@ func parseFiles(t *template.Template, fm template.FuncMap, leftDelim, rightDelim
 			return nil, err
 		}
 		s := string(b)
-		var tmpl *template.Template
+		var tmpl Template
 		if t == nil {
-			t = template.New(templateName)
+			t = NewTemplate(pkgPath, templateName)
 		}
 		if templateName == t.Name() {
 			tmpl = t
@@ -313,7 +343,7 @@ func parseFiles(t *template.Template, fm template.FuncMap, leftDelim, rightDelim
 	return t, nil
 }
 
-func evaluateFuncMap(workingDirectory string, typesInfo *types.Info, pkg *types.Package, fileSet *token.FileSet, call *ast.CallExpr, fm template.FuncMap, funcTypesMap TemplateFunctions) error {
+func evaluateFuncMap(workingDirectory string, typesInfo *types.Info, pkg *types.Package, fileSet *token.FileSet, call *ast.CallExpr, fm map[string]any, funcTypesMap TemplateFunctions) error {
 	if len(call.Args) != 1 {
 		return wrapWithFilename(workingDirectory, fileSet, call.Lparen, fmt.Errorf("expected exactly 1 template.FuncMap composite literal argument"))
 	}

@@ -1,0 +1,36 @@
+# html/template errors with ErrBranchEnd at Execute time.
+# The go test exercises the html/template escape analysis which rejects
+# templates whose {{if}} branches end in different HTML contexts.
+# Companion: pass_text_template_no_err_branch_end.txt
+
+check-templates
+exec go test
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- main.go --
+package main
+
+import "html/template"
+
+var templates = template.Must(template.New("page").Parse(`<div {{if .}}>{{end}}</div>`))
+
+func main() {}
+
+-- main_test.go --
+package main
+
+import (
+	"io"
+	"testing"
+)
+
+func TestExecuteBranchEnd(t *testing.T) {
+	err := templates.Execute(io.Discard, false)
+	if err == nil {
+		t.Fatal("expected html/template ErrBranchEnd error, got nil")
+	}
+	t.Logf("got expected error: %s", err.Error())
+}
