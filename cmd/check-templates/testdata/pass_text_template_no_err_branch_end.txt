@@ -1,0 +1,35 @@
+# text/template does not error with ErrBranchEnd.
+# The go test confirms text/template.Execute succeeds on the same template
+# that html/template rejects due to branches ending in different contexts.
+# Companion: err_html_template_err_branch_end.txt
+
+check-templates
+exec go test
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- main.go --
+package main
+
+import "text/template"
+
+var templates = template.Must(template.New("page").Parse(`<div {{if .}}>{{end}}</div>`))
+
+func main() {}
+
+-- main_test.go --
+package main
+
+import (
+	"io"
+	"testing"
+)
+
+func TestExecuteNoBranchEnd(t *testing.T) {
+	err := templates.Execute(io.Discard, false)
+	if err != nil {
+		t.Fatalf("text/template should not produce ErrBranchEnd, got: %v", err)
+	}
+}

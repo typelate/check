@@ -6,7 +6,6 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
-	"html/template"
 	"path/filepath"
 
 	"golang.org/x/tools/go/packages"
@@ -22,7 +21,7 @@ type pendingCall struct {
 }
 
 type resolvedTemplate struct {
-	templates *template.Template
+	templates asteval.Template
 	functions asteval.TemplateFunctions
 	metadata  *asteval.TemplateMetadata
 }
@@ -34,11 +33,9 @@ type resolvedTemplate struct {
 // ExecuteTemplate must be called with a string literal for the second parameter.
 func Package(pkg *packages.Package) error {
 	pending, receivers := findExecuteCalls(pkg)
-	resolved, err := resolveTemplates(pkg, receivers)
-	if err != nil {
-		return err
-	}
-	return checkCalls(pkg, pending, resolved)
+	resolved, resolveErrs := resolveTemplates(pkg, receivers)
+	callErr := checkCalls(pkg, pending, resolved)
+	return errors.Join(append(resolveErrs, callErr)...)
 }
 
 // findExecuteCalls walks the package syntax looking for ExecuteTemplate calls
@@ -90,14 +87,16 @@ func findExecuteCalls(pkg *packages.Package) ([]pendingCall, map[types.Object]st
 
 // resolveTemplates resolves each unique receiver object to its template
 // construction chain, including additional ParseFS/Parse modifications.
-func resolveTemplates(pkg *packages.Package, receivers map[types.Object]struct{}) (map[types.Object]*resolvedTemplate, error) {
+func resolveTemplates(pkg *packages.Package, receivers map[types.Object]struct{}) (map[types.Object]*resolvedTemplate, []error) {
 	resolved := make(map[types.Object]*resolvedTemplate)
 
 	workingDirectory := packageDirectory(pkg)
 	embeddedPaths, err := asteval.RelativeFilePaths(workingDirectory, pkg.EmbedFiles...)
 	if err != nil {
-		return nil, fmt.Errorf("failed to calculate relative path for embedded files: %w", err)
+		return nil, []error{fmt.Errorf("failed to calculate relative path for embedded files: %w", err)}
 	}
+
+	var resolveErrs []error
 
 	resolveExpr := func(obj types.Object, name string, expr ast.Expr) {
 		if _, needed := receivers[obj]; !needed {
@@ -105,8 +104,9 @@ func resolveTemplates(pkg *packages.Package, receivers map[types.Object]struct{}
 		}
 		funcTypeMap := asteval.DefaultFunctions(pkg.Types)
 		meta := &asteval.TemplateMetadata{}
-		ts, _, _, err := asteval.EvaluateTemplateSelector(nil, pkg.Types, pkg.TypesInfo, expr, workingDirectory, name, "", "", pkg.Fset, pkg.Syntax, embeddedPaths, funcTypeMap, make(template.FuncMap), meta)
+		ts, _, _, err := asteval.EvaluateTemplateSelector(nil, pkg.Types, pkg.TypesInfo, expr, workingDirectory, name, "", "", pkg.Fset, pkg.Syntax, embeddedPaths, funcTypeMap, make(map[string]any), meta)
 		if err != nil {
+			resolveErrs = append(resolveErrs, err)
 			return
 		}
 		resolved[obj] = &resolvedTemplate{
@@ -194,7 +194,7 @@ func resolveTemplates(pkg *packages.Package, receivers map[types.Object]struct{}
 				return true
 			}
 			meta := &asteval.TemplateMetadata{}
-			ts, _, _, err := asteval.EvaluateTemplateSelector(rt.templates, pkg.Types, pkg.TypesInfo, call, workingDirectory, "", "", "", pkg.Fset, pkg.Syntax, embeddedPaths, rt.functions, make(template.FuncMap), meta)
+			ts, _, _, err := asteval.EvaluateTemplateSelector(rt.templates, pkg.Types, pkg.TypesInfo, call, workingDirectory, "", "", "", pkg.Fset, pkg.Syntax, embeddedPaths, rt.functions, make(map[string]any), meta)
 			if err != nil {
 				return true
 			}
@@ -205,7 +205,7 @@ func resolveTemplates(pkg *packages.Package, receivers map[types.Object]struct{}
 		})
 	}
 
-	return resolved, nil
+	return resolved, resolveErrs
 }
 
 // checkCalls type-checks each pending ExecuteTemplate call against its
@@ -231,9 +231,8 @@ func checkCalls(pkg *packages.Package, pending []pendingCall, resolved map[types
 		if looked == nil {
 			continue
 		}
-		treeFinder := (*asteval.Forrest)(rt.templates)
-		global := NewGlobal(pkg.Types, pkg.Fset, treeFinder, mergedFunctions)
-		if err := Execute(global, looked.Tree, p.dataType); err != nil {
+		global := NewGlobal(pkg.Types, pkg.Fset, rt.templates, mergedFunctions)
+		if err := Execute(global, looked.Tree(), p.dataType); err != nil {
 			errs = append(errs, err)
 		}
 	}
