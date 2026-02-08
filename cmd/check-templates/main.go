@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"go/ast"
 	"go/token"
@@ -24,9 +25,21 @@ func main() {
 }
 
 func run(dir string, args []string, stdout, stderr io.Writer) int {
+	var (
+		verbose bool
+	)
+
+	flagSet := flag.NewFlagSet("check-templates", flag.ContinueOnError)
+	flagSet.BoolVar(&verbose, "v", false, "show all calls")
+	flagSet.StringVar(&dir, "C", dir, "change directory")
+	if err := flagSet.Parse(args); err != nil {
+		_, _ = fmt.Fprintln(stderr, err)
+		return 1
+	}
+
 	loadArgs := []string{"."}
-	if len(args) > 0 {
-		loadArgs = args
+	if args := flagSet.Args(); len(args) > 0 {
+		loadArgs = flagSet.Args()
 	}
 
 	fset := token.NewFileSet()
@@ -48,9 +61,17 @@ func run(dir string, args []string, stdout, stderr io.Writer) int {
 			exitCode = 1
 		}
 		if err := check.Package(pkg, func(node *ast.CallExpr, t *parse.Tree, tp types.Type) {
-
+			if !verbose {
+				return
+			}
+			pos := fset.Position(node.Pos())
+			_, _ = fmt.Fprintf(stdout, "%s\t%q\t%s\n", pos, t.Name, tp)
 		}, func(node *parse.TemplateNode, t *parse.Tree, tp types.Type) {
-
+			if !verbose {
+				return
+			}
+			pos, _ := t.ErrorContext(node)
+			_, _ = fmt.Fprintf(stdout, "%s\t%q\t%s\n", pos, t.Name, tp)
 		}); err != nil {
 			_, _ = fmt.Fprintln(stderr, err)
 			exitCode = 1

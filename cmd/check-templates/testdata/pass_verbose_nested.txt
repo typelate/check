@@ -1,0 +1,43 @@
+# The -v flag also lists nested {{template}} calls.
+
+check-templates -v
+stdout 'main\.go:.*"index\.gohtml"\texample\.com/app\.Page'
+stdout 'index\.gohtml:1:.*"index\.gohtml"\texample\.com/app\.Page'
+! stderr .
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- main.go --
+package main
+
+import (
+	"embed"
+	"fmt"
+	"html/template"
+	"io"
+)
+
+var (
+	//go:embed *.gohtml
+	source embed.FS
+
+	templates = template.Must(template.ParseFS(source, "*"))
+)
+
+type Page struct {
+	Title string
+}
+
+func render() {
+	_ = templates.ExecuteTemplate(io.Discard, "index.gohtml", Page{})
+}
+
+var _ = fmt.Sprint
+
+-- index.gohtml --
+{{template "header.gohtml" .}}
+<p>body</p>
+-- header.gohtml --
+<h1>{{.Title}}</h1>
