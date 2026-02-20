@@ -5,6 +5,7 @@ import (
 	"go/token"
 	"log"
 	"slices"
+	"strings"
 	"text/template"
 	"text/template/parse"
 
@@ -81,7 +82,14 @@ func ExampleExecute() {
 	{
 		const templateName = "unknown field"
 		if err := check.Execute(global, tmpl.Lookup("unknown field").Tree, personObj.Type()); err != nil {
-			fmt.Println(err.Error())
+			msg := err.Error()
+			// Strip machine-specific declared-at location for deterministic output.
+			if i := strings.Index(msg, " (declared at "); i >= 0 {
+				if j := strings.Index(msg[i:], ")"); j >= 0 {
+					msg = msg[:i] + msg[i+j+1:]
+				}
+			}
+			fmt.Println(msg)
 		} else {
 			fmt.Printf("template %q type-check passed\n", templateName)
 		}
@@ -94,6 +102,6 @@ func ExampleExecute() {
 			fmt.Printf("template %q type-check passed\n", templateName)
 		}
 	}
-	// Output: type check failed: example:3:3: executing "unknown field" at <.UnknownField>: UnknownField not found on github.com/typelate/check_test.Person
+	// Output: type check failed: example:3:3: executing "unknown field" at <.UnknownField>: UnknownField not found on github.com/typelate/check_test.Person; available: Name string
 	// template "known field" type-check passed
 }

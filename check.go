@@ -6,6 +6,7 @@ import (
 	"go/token"
 	"go/types"
 	"maps"
+	"slices"
 	"strconv"
 	"strings"
 	"text/template/parse"
@@ -76,6 +77,85 @@ func (g *Global) TypeString(typ types.Type) string {
 	var buf bytes.Buffer
 	types.WriteType(&buf, typ, g.Qualifier)
 	return buf.String()
+}
+
+func (g *Global) formatNotFound(ident string, tp types.Type) string {
+	var buf strings.Builder
+	buf.WriteString(ident)
+	buf.WriteString(" not found on ")
+	buf.WriteString(g.TypeString(tp))
+	if named, ok := tp.(*types.Named); ok {
+		pos := g.fileSet.Position(named.Obj().Pos())
+		if pos.IsValid() {
+			fmt.Fprintf(&buf, " (declared at %s)", pos)
+		}
+	}
+	members := g.collectMembers(tp)
+	if len(members) == 0 {
+		buf.WriteString("; no exported fields or methods")
+	} else {
+		buf.WriteString("; available: ")
+		buf.WriteString(strings.Join(members, ", "))
+	}
+	return buf.String()
+}
+
+func (g *Global) collectMembers(tp types.Type) []string {
+	var members []string
+	seen := make(map[string]bool)
+
+	// Collect methods via method set.
+	// For interfaces, use the type directly (pointer-to-interface has empty method set).
+	// For concrete types, use pointer to pick up pointer receiver methods.
+	var mset *types.MethodSet
+	if types.IsInterface(tp) {
+		mset = types.NewMethodSet(tp)
+	} else {
+		mset = types.NewMethodSet(types.NewPointer(tp))
+	}
+	for i := range mset.Len() {
+		obj := mset.At(i).Obj()
+		name := obj.Name()
+		if !token.IsExported(name) {
+			continue
+		}
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		sigStr := g.TypeString(obj.Type())
+		// sigStr looks like "func(...) ..." — trim the "func" prefix to get "(...) ..."
+		sigStr = strings.TrimPrefix(sigStr, "func")
+		members = append(members, name+sigStr)
+	}
+
+	// Collect struct fields (including promoted fields from embedded structs).
+	if st, ok := tp.Underlying().(*types.Struct); ok {
+		g.collectStructFields(st, seen, &members)
+	}
+
+	slices.Sort(members)
+	return members
+}
+
+func (g *Global) collectStructFields(st *types.Struct, seen map[string]bool, members *[]string) {
+	for i := range st.NumFields() {
+		f := st.Field(i)
+		if !f.Exported() {
+			continue
+		}
+		if f.Embedded() {
+			if inner, ok := f.Type().Underlying().(*types.Struct); ok {
+				g.collectStructFields(inner, seen, members)
+			}
+			continue
+		}
+		if seen[f.Name()] {
+			continue
+		}
+		seen[f.Name()] = true
+		*members = append(*members, f.Name()+" "+g.TypeString(f.Type()))
+	}
 }
 
 // TreeFinder should wrap https://pkg.go.dev/html/template#Template.Lookup and return the Tree field from the Template
@@ -452,7 +532,7 @@ func (s *scope) checkIdentifiers(tree *parse.Tree, dot types.Type, n parse.Node,
 			}
 			obj, _, _ := types.LookupFieldOrMethod(x, true, s.global.pkg, ident)
 			if obj == nil {
-				return nil, newError(tree, n, "%s not found on %s", ident, s.global.TypeString(x))
+				return nil, newError(tree, n, "%s", s.global.formatNotFound(ident, x))
 			}
 			switch o := obj.(type) {
 			default:

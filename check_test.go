@@ -93,7 +93,26 @@ func TestTree(t *testing.T) {
 			Template: `{{.Field}}`,
 			Data:     Void{},
 			Error: func(t *testing.T, err, _ error, tp types.Type) {
-				require.EqualError(t, err, fmt.Sprintf(`type check failed: template:1:2: executing "template" at <.Field>: Field not found on %s`, tp))
+				require.ErrorContains(t, err, "Field not found on")
+				require.ErrorContains(t, err, "no exported fields or methods")
+			},
+		},
+		{
+			Name:     "not found shows available field",
+			Template: `{{.Missing}}`,
+			Data:     StructWithField{},
+			Error: func(t *testing.T, err, _ error, tp types.Type) {
+				require.ErrorContains(t, err, "Missing not found on")
+				require.ErrorContains(t, err, "Field struct{}")
+			},
+		},
+		{
+			Name:     "not found shows available method",
+			Template: `{{.Missing}}`,
+			Data:     TypeWithMethodSignatureResult{},
+			Error: func(t *testing.T, err, _ error, tp types.Type) {
+				require.ErrorContains(t, err, "Missing not found on")
+				require.ErrorContains(t, err, "Method() struct{}")
 			},
 		},
 		{
@@ -710,6 +729,7 @@ func TestTree(t *testing.T) {
 			Error: func(t *testing.T, checkErr, execErr error, tp types.Type) {
 				assert.NoError(t, execErr)
 				require.ErrorContains(t, checkErr, `type check failed: template:1:8: executing "template" at <.Unknown>: Unknown not found on untyped nil`)
+				require.ErrorContains(t, checkErr, "no exported fields or methods")
 			},
 		},
 		{
@@ -719,6 +739,7 @@ func TestTree(t *testing.T) {
 			Error: func(t *testing.T, checkErr, execErr error, tp types.Type) {
 				assert.NoError(t, execErr)
 				require.ErrorContains(t, checkErr, `type check failed: template:1:7: executing "template" at <.Unknown>: Unknown not found on untyped nil`)
+				require.ErrorContains(t, checkErr, "no exported fields or methods")
 			},
 		},
 		{
