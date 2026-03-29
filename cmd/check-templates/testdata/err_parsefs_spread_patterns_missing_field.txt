@@ -1,0 +1,39 @@
+# ParseFS called with a spread []string variable for patterns. Template
+# type errors should still be caught.
+
+! check-templates
+stderr 'BadField'
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- main.go --
+package main
+
+import (
+	"embed"
+	"fmt"
+	"html/template"
+	"net/http"
+)
+
+//go:embed templates/*.gohtml
+var source embed.FS
+
+type Page struct {
+	Title string
+}
+
+var patterns = []string{"templates/index.gohtml"}
+
+var ts = template.Must(template.New("").ParseFS(source, patterns...))
+
+func handleIndex(w http.ResponseWriter, r *http.Request) {
+	_ = ts.ExecuteTemplate(w, "index.gohtml", Page{Title: "Home"})
+}
+
+var _ = fmt.Sprint
+
+-- templates/index.gohtml --
+<h1>{{.BadField}}</h1>

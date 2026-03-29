@@ -1,0 +1,39 @@
+# Unused template variables produce a warning.
+
+check-templates -w
+stderr 'variable \$x declared but not used \(W005\)'
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- main.go --
+package main
+
+import (
+	"embed"
+	"fmt"
+	"html/template"
+	"net/http"
+)
+
+var (
+	//go:embed *.gohtml
+	source embed.FS
+
+	templates = template.Must(template.ParseFS(source, "*"))
+)
+
+type Page struct {
+	Title string
+	Name  string
+}
+
+func handleIndex(w http.ResponseWriter, r *http.Request) {
+	_ = templates.ExecuteTemplate(w, "index.gohtml", Page{Title: "Home", Name: "Alice"})
+}
+
+var _ = fmt.Sprint
+
+-- index.gohtml --
+{{$x := .Title}}<h1>{{.Name}}</h1>

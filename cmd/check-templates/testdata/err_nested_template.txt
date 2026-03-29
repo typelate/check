@@ -1,7 +1,7 @@
 # A nested template call should check the invoked template against the data type.
 
 ! check-templates
-stderr 'type check failed:.*header\.gohtml:1:6: executing "header\.gohtml" at <\.Missing>: Missing not found on example\.com/app\.Page'
+stderr 'header\.gohtml:1:6: executing "header\.gohtml" at <\.Missing>: Missing not found on example\.com/app\.Page \(E001\)'
 
 -- go.mod --
 module example.com/app

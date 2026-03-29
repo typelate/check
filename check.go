@@ -22,7 +22,7 @@ func newError(tree *parse.Tree, node parse.Node, message string, args ...any) *E
 	return &Error{
 		Tree: tree,
 		Node: node,
-		err:  fmt.Errorf("type check failed: %s: executing %q at <%s>: %w", loc, tree.Name, context, fmt.Errorf(message, args...)),
+		err:  fmt.Errorf("%s: executing %q at <%s>: %s (E001)", loc, tree.Name, context, fmt.Sprintf(message, args...)),
 	}
 }
 
@@ -42,6 +42,11 @@ func (e *Error) Unwrap() error {
 	return e.err
 }
 
+// WarningFunc is called when a non-fatal issue is detected during
+// type-checking, such as field access on an interface type or
+// unguarded pointer dereference.
+type WarningFunc func(category WarningCategory, tree *parse.Tree, node parse.Node, message string)
+
 type Global struct {
 	trees TreeFinder
 	calls CallChecker
@@ -52,22 +57,33 @@ type Global struct {
 
 	InspectTemplateNode TemplateNodeInspectorFunc
 	InspectCallNode     ExecuteTemplateNodeInspectorFunc
+	Warn                WarningFunc
+
+	// nonilFields caches struct fields tagged with `templatecheck:"nonil"`.
+	// Keyed by the underlying *types.Struct; value is a set of field names.
+	nonilFields map[*types.Struct]map[string]struct{}
 
 	// Qualifier controls how types are printed in error messages.
 	// If nil, types are printed with their full package path.
 	// See types.WriteType for details.
 	Qualifier types.Qualifier
+
+	// subTemplateCallTypes records every data type a sub-template is
+	// invoked with via {{template "name" .Data}}, keyed by template name.
+	// Populated during Execute; used post-walk to detect W007.
+	subTemplateCallTypes map[string][]types.Type
 }
 
 type TemplateNodeInspectorFunc func(node *parse.TemplateNode, t *parse.Tree, tp types.Type)
 
 func NewGlobal(pkg *types.Package, fileSet *token.FileSet, trees TreeFinder, fnChecker CallChecker) *Global {
 	return &Global{
-		trees:           trees,
-		calls:           fnChecker,
-		pkg:             pkg,
-		fileSet:         fileSet,
-		typeNodeMapping: make(TypeNodeMapping),
+		trees:                trees,
+		calls:                fnChecker,
+		pkg:                  pkg,
+		fileSet:              fileSet,
+		typeNodeMapping:      make(TypeNodeMapping),
+		subTemplateCallTypes: make(map[string][]types.Type),
 	}
 }
 
@@ -102,21 +118,108 @@ func Execute(global *Global, tree *parse.Tree, data types.Type) error {
 		variables: map[string]types.Type{
 			"$": data,
 		},
+		guarded:   make(map[string]struct{}),
+		nonilVars: make(map[string]struct{}),
+		declared:  make(map[string]parse.Node),
+		used:      make(map[string]struct{}),
 	}
 	_, err := s.walk(tree, data, nil, tree.Root)
+	s.warnUnused(tree)
 	return err
 }
 
 type scope struct {
 	global    *Global
 	variables map[string]types.Type
+	guarded   map[string]struct{} // set of field paths known non-nil (e.g. ".Foo.Bar")
+	nonilVars map[string]struct{} // template variables known non-nil (e.g. "$s")
+	declared  map[string]parse.Node // variables declared in this scope (name → declaration node)
+	used      map[string]struct{}   // variables read in this scope or child scopes
+
+	// resultNonil is set to true by checkIdentifiers when the final field
+	// in a chain has a templatecheck:"nonil" struct tag. Read and cleared
+	// by checkPipeNode to propagate nonil status to declared variables.
+	resultNonil bool
 }
 
 func (s *scope) child() *scope {
-	return &scope{
+	c := &scope{
 		global:    s.global,
 		variables: maps.Clone(s.variables),
+		guarded:   make(map[string]struct{}, len(s.guarded)),
+		nonilVars: maps.Clone(s.nonilVars),
+		declared:  make(map[string]parse.Node),
+		used:      s.used, // share with parent so child uses bubble up
 	}
+	for k, v := range s.guarded {
+		c.guarded[k] = v
+	}
+	return c
+}
+
+// warnUnused emits W005 warnings for variables declared in this scope
+// that were never read.
+func (s *scope) warnUnused(tree *parse.Tree) {
+	if s.global.Warn == nil {
+		return
+	}
+	for name, node := range s.declared {
+		if _, ok := s.used[name]; !ok {
+			s.global.Warn(WarnUnusedVariable, tree, node, fmt.Sprintf("variable %s declared but not used", name))
+		}
+	}
+}
+
+// pipeFieldPath extracts the field path from a pipe expression.
+// For {{with .Foo.Bar}}, returns ".Foo.Bar".
+// For {{with .}}, returns ".".
+// Returns "" if the pipe is not a simple field or dot expression.
+func pipeFieldPath(pipe *parse.PipeNode) string {
+	if pipe == nil || len(pipe.Cmds) != 1 {
+		return ""
+	}
+	cmd := pipe.Cmds[0]
+	if len(cmd.Args) != 1 {
+		return ""
+	}
+	switch n := cmd.Args[0].(type) {
+	case *parse.DotNode:
+		return "."
+	case *parse.FieldNode:
+		return "." + strings.Join(n.Ident, ".")
+	case *parse.VariableNode:
+		// Handle $-prefixed paths like $.User → "$.User"
+		if len(n.Ident) >= 2 && n.Ident[0] == "$" {
+			return "$." + strings.Join(n.Ident[1:], ".")
+		}
+	}
+	return ""
+}
+
+// pipeAndGuardPaths extracts guard paths from "and" chains in a pipe.
+// For {{if and .User (eq .User.Role "admin")}}, returns [".User"].
+// All bare variable/field arguments in the and chain contribute paths.
+func pipeAndGuardPaths(pipe *parse.PipeNode) []string {
+	if pipe == nil || len(pipe.Cmds) != 1 {
+		return nil
+	}
+	cmd := pipe.Cmds[0]
+	if len(cmd.Args) < 3 {
+		return nil
+	}
+	// Check if the first arg is the "and" identifier.
+	ident, ok := cmd.Args[0].(*parse.IdentifierNode)
+	if !ok || ident.Ident != "and" {
+		return nil
+	}
+	// Collect guard paths from all arguments (the bare references).
+	var paths []string
+	for _, arg := range cmd.Args[1:] {
+		if p := nodeGuardPath(arg); p != "" {
+			paths = append(paths, p)
+		}
+	}
+	return paths
 }
 
 func (s *scope) walk(tree *parse.Tree, dot, prev types.Type, node parse.Node) (types.Type, error) {
@@ -179,9 +282,42 @@ func (s *scope) checkChainNode(tree *parse.Tree, dot, prev types.Type, n *parse.
 }
 
 func (s *scope) checkVariableNode(tree *parse.Tree, n *parse.VariableNode, args []types.Type) (types.Type, error) {
+	s.used[n.Ident[0]] = struct{}{}
 	tp, ok := s.variables[n.Ident[0]]
 	if !ok {
 		return nil, newError(tree, n, "variable %s not found", n.Ident[0])
+	}
+	// If this variable is known non-nil (from a templatecheck:"nonil"
+	// struct tag), temporarily guard "." so the first pointer deref in
+	// the identifier chain is not flagged as W003.
+	if _, nonil := s.nonilVars[n.Ident[0]]; nonil {
+		_, alreadyGuarded := s.guarded["."]
+		s.guarded["."] = struct{}{}
+		if !alreadyGuarded {
+			defer delete(s.guarded, ".")
+		}
+	}
+	// For $ references, translate $.-prefixed guarded paths to .-prefixed
+	// form so checkIdentifiers can match them. For example, if {{if $.User}}
+	// guards "$.User", translate to ".User" for the identifier chain check.
+	if n.Ident[0] == "$" {
+		var added []string
+		for path := range s.guarded {
+			if strings.HasPrefix(path, "$.") {
+				dotPath := path[1:] // "$.User" → ".User"
+				if _, exists := s.guarded[dotPath]; !exists {
+					s.guarded[dotPath] = struct{}{}
+					added = append(added, dotPath)
+				}
+			}
+		}
+		if len(added) > 0 {
+			defer func() {
+				for _, p := range added {
+					delete(s.guarded, p)
+				}
+			}()
+		}
 	}
 	return s.checkIdentifiers(tree, tp, n, n.Ident[1:], args)
 }
@@ -210,9 +346,38 @@ func (s *scope) checkPipeNode(tree *parse.Tree, dot types.Type, n *parse.PipeNod
 		result = tp
 	}
 	if len(n.Decl) > 0 && len(n.Decl[0].Ident) > 0 {
-		s.variables[n.Decl[0].Ident[0]] = result
+		name := n.Decl[0].Ident[0]
+		s.variables[name] = result
+		if s.resultNonil {
+			s.nonilVars[name] = struct{}{}
+			s.resultNonil = false
+		}
+		if name != "$" {
+			s.declared[name] = n.Decl[0]
+		}
 	}
 	return result, nil
+}
+
+// deadBranchKind inspects a pipe to see if it is a literal constant condition.
+// Returns "true", "false", or "nil" if the pipe is a single literal BoolNode
+// or NilNode; otherwise returns "".
+func deadBranchKind(pipe *parse.PipeNode) string {
+	if pipe == nil || len(pipe.Cmds) != 1 {
+		return ""
+	}
+	cmd := pipe.Cmds[0]
+	if len(cmd.Args) != 1 {
+		return ""
+	}
+	switch n := cmd.Args[0].(type) {
+	case *parse.BoolNode:
+		if n.True {
+			return "true"
+		}
+		return "false"
+	}
+	return ""
 }
 
 func (s *scope) checkIfNode(tree *parse.Tree, dot types.Type, n *parse.IfNode) error {
@@ -220,15 +385,41 @@ func (s *scope) checkIfNode(tree *parse.Tree, dot types.Type, n *parse.IfNode) e
 	if err != nil {
 		return err
 	}
+	// Warn about literal-constant conditions.
+	if s.global.Warn != nil {
+		switch deadBranchKind(n.Pipe) {
+		case "true":
+			if n.ElseList != nil {
+				s.global.Warn(WarnDeadBranch, tree, n.Pipe, "else branch is unreachable: condition is always true")
+			}
+		case "false":
+			s.global.Warn(WarnDeadBranch, tree, n.Pipe, "if branch is unreachable: condition is always false")
+		}
+	}
 	ifScope := s.child()
+	if path := pipeFieldPath(n.Pipe); path != "" {
+		ifScope.guarded[path] = struct{}{}
+	}
+	// Extract additional guard paths from "and" chains in the pipe.
+	for _, path := range pipeAndGuardPaths(n.Pipe) {
+		if strings.HasPrefix(path, "$") && !strings.Contains(path, ".") {
+			// Bare variable like "$u" — mark as nonil so checkVariableNode
+			// guards the first pointer deref.
+			ifScope.nonilVars[path] = struct{}{}
+		} else {
+			ifScope.guarded[path] = struct{}{}
+		}
+	}
 	if _, err := ifScope.walk(tree, dot, nil, n.List); err != nil {
 		return err
 	}
+	ifScope.warnUnused(tree)
 	if n.ElseList != nil {
 		elseScope := s.child()
 		if _, err := elseScope.walk(tree, dot, nil, n.ElseList); err != nil {
 			return err
 		}
+		elseScope.warnUnused(tree)
 	}
 	return nil
 }
@@ -239,15 +430,34 @@ func (s *scope) checkWithNode(tree *parse.Tree, dot types.Type, n *parse.WithNod
 	if err != nil {
 		return err
 	}
+	child.warnUnused(tree)
+	// Warn about literal-constant conditions.
+	if s.global.Warn != nil {
+		switch deadBranchKind(n.Pipe) {
+		case "true":
+			if n.ElseList != nil {
+				s.global.Warn(WarnDeadBranch, tree, n.Pipe, "else branch is unreachable: condition is always true")
+			}
+		case "false":
+			s.global.Warn(WarnDeadBranch, tree, n.Pipe, "with branch is unreachable: condition is always false")
+		}
+	}
 	withScope := child.child()
+	if path := pipeFieldPath(n.Pipe); path != "" {
+		withScope.guarded[path] = struct{}{}
+	}
+	// Inside {{with}}, dot is reassigned to the pipe value, which is known non-nil.
+	withScope.guarded["."] = struct{}{}
 	if _, err := withScope.walk(tree, x, nil, n.List); err != nil {
 		return err
 	}
+	withScope.warnUnused(tree)
 	if n.ElseList != nil {
 		elseScope := child.child()
 		if _, err := elseScope.walk(tree, dot, nil, n.ElseList); err != nil {
 			return err
 		}
+		elseScope.warnUnused(tree)
 	}
 	return nil
 }
@@ -298,17 +508,33 @@ func (s *scope) checkTemplateNode(tree *parse.Tree, dot types.Type, n *parse.Tem
 	if fn := s.global.InspectTemplateNode; fn != nil {
 		fn(n, tree, x)
 	}
+	// Record this call site's data type for post-walk W007 detection.
+	if s.global.subTemplateCallTypes != nil {
+		s.global.subTemplateCallTypes[n.Name] = append(s.global.subTemplateCallTypes[n.Name], x)
+	}
 	childTree, ok := s.global.trees.FindTree(n.Name)
 	if !ok {
 		return newError(tree, n, "template %q not found", n.Name)
+	}
+	childGuarded := make(map[string]struct{})
+	// If dot is known non-nil in the current scope (e.g. inside a {{with}}
+	// block), propagate that to the child template since the same value
+	// is being passed as the child's dot.
+	if _, dotGuarded := s.guarded["."]; dotGuarded {
+		childGuarded["."] = struct{}{}
 	}
 	childScope := scope{
 		global: s.global,
 		variables: map[string]types.Type{
 			"$": x,
 		},
+		guarded:   childGuarded,
+		nonilVars: make(map[string]struct{}),
+		declared:  make(map[string]parse.Node),
+		used:      make(map[string]struct{}),
 	}
 	_, err := childScope.walk(childTree, x, nil, childTree.Root)
+	childScope.warnUnused(childTree)
 	return err
 }
 
@@ -356,7 +582,13 @@ func (s *scope) checkCommandNode(tree *parse.Tree, dot, prev types.Type, cmd *pa
 		}
 		return s.checkChainNode(tree, dot, prev, n, argTypes)
 	case *parse.IdentifierNode:
-		argTypes, err := s.argumentTypes(tree, dot, prev, cmd.Args[1:])
+		var argTypes []types.Type
+		var err error
+		if n.Ident == "and" {
+			argTypes, err = s.argumentTypesAnd(tree, dot, prev, cmd.Args[1:])
+		} else {
+			argTypes, err = s.argumentTypes(tree, dot, prev, cmd.Args[1:])
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -398,6 +630,73 @@ func (s *scope) checkCommandNode(tree *parse.Tree, dot, prev types.Type, cmd *pa
 	}
 }
 
+// argumentTypesAnd evaluates arguments to the built-in "and" function
+// left-to-right, propagating nil-safety from earlier arguments to later
+// ones. If argument N is a bare variable or field reference to a pointer
+// type, arguments N+1..last are evaluated with that path guarded,
+// because Go's template "and" short-circuits on the first falsy value.
+func (s *scope) argumentTypesAnd(tree *parse.Tree, dot types.Type, prev types.Type, args []parse.Node) ([]types.Type, error) {
+	argTypes := make([]types.Type, 0, len(args)+1)
+	var addedGuards []string
+	var addedNonilVars []string
+	defer func() {
+		for _, g := range addedGuards {
+			delete(s.guarded, g)
+		}
+		for _, v := range addedNonilVars {
+			delete(s.nonilVars, v)
+		}
+	}()
+	for _, arg := range args {
+		argType, err := s.walk(tree, dot, prev, arg)
+		if err != nil {
+			return nil, err
+		}
+		argTypes = append(argTypes, argType)
+		// If this argument is a bare variable/field reference to a pointer
+		// type, guard it for subsequent arguments.
+		if path := nodeGuardPath(arg); path != "" {
+			if strings.HasPrefix(path, "$") && !strings.Contains(path, ".") {
+				// Bare variable like "$u" — mark as nonil.
+				if _, already := s.nonilVars[path]; !already {
+					s.nonilVars[path] = struct{}{}
+					addedNonilVars = append(addedNonilVars, path)
+				}
+			} else if _, already := s.guarded[path]; !already {
+				s.guarded[path] = struct{}{}
+				addedGuards = append(addedGuards, path)
+			}
+		}
+	}
+	if prev != nil {
+		argTypes = append(argTypes, prev)
+	}
+	return argTypes, nil
+}
+
+// nodeGuardPath extracts a guardable path from a parse node, if the node
+// is a bare variable or field reference. Returns "" if the node is not
+// a simple reference that can serve as a nil guard.
+func nodeGuardPath(node parse.Node) string {
+	switch n := node.(type) {
+	case *parse.FieldNode:
+		return "." + strings.Join(n.Ident, ".")
+	case *parse.VariableNode:
+		if len(n.Ident) >= 2 && n.Ident[0] == "$" {
+			// $.User → "$." prefix to distinguish from bare variable $u
+			return "$." + strings.Join(n.Ident[1:], ".")
+		}
+		if len(n.Ident) == 1 {
+			return n.Ident[0] // bare variable like "$u"
+		}
+	case *parse.CommandNode:
+		if len(n.Args) == 1 {
+			return nodeGuardPath(n.Args[0])
+		}
+	}
+	return ""
+}
+
 func (s *scope) argumentTypes(tree *parse.Tree, dot types.Type, prev types.Type, args []parse.Node) ([]types.Type, error) {
 	argTypes := make([]types.Type, 0, len(args)+1)
 	for _, arg := range args {
@@ -422,7 +721,29 @@ func (s *scope) notAFunction(tree *parse.Tree, node parse.Node, args []parse.Nod
 
 func (s *scope) checkIdentifiers(tree *parse.Tree, dot types.Type, n parse.Node, idents []string, args []types.Type) (types.Type, error) {
 	x := dot
+	// prevType tracks the type before field resolution so we can check
+	// whether a pointer-typed field has a templatecheck:"nonil" tag.
+	var prevType types.Type
 	for i, ident := range idents {
+		if _, isPtr := x.(*types.Pointer); isPtr && s.global.Warn != nil {
+			// Build the path of the pointer value being dereferenced.
+			// If i==0, the pointer is dot itself (path ".").
+			// If i>0, it's the field path up to this point (e.g. ".Bar").
+			var ptrPath string
+			if i == 0 {
+				ptrPath = "."
+			} else {
+				ptrPath = "." + strings.Join(idents[:i], ".")
+			}
+			// Suppress W003 if the field that produced this pointer has
+			// a `templatecheck:"nonil"` struct tag.
+			if i > 0 && s.global.isNonilField(dereference(prevType), idents[i-1]) {
+				// nonil-tagged field — skip warning
+			} else if _, guarded := s.guarded[ptrPath]; !guarded {
+				s.global.Warn(WarnNilDereference, tree, n, fmt.Sprintf("accessing .%s on pointer type %s may panic if nil; consider guarding with {{if}} or {{with}}, or add a `templatecheck:\"nonil\"` struct tag", ident, s.global.TypeString(x)))
+			}
+		}
+		prevType = x
 		x = dereference(x)
 		switch xx := x.(type) {
 		case *types.Map:
@@ -452,11 +773,26 @@ func (s *scope) checkIdentifiers(tree *parse.Tree, dot types.Type, n parse.Node,
 			}
 			obj, _, _ := types.LookupFieldOrMethod(x, true, s.global.pkg, ident)
 			if obj == nil {
+				if types.IsInterface(x) {
+					if s.global.Warn != nil {
+						s.global.Warn(WarnInterfaceFieldAccess, tree, n, fmt.Sprintf("field access .%s on interface type %s cannot be statically verified", ident, s.global.TypeString(x)))
+					}
+					x = types.NewInterfaceType(nil, nil)
+					continue
+				}
 				return nil, newError(tree, n, "%s not found on %s", ident, s.global.TypeString(x))
 			}
 			switch o := obj.(type) {
 			default:
 				x = obj.Type()
+				// If the field has a templatecheck:"nonil" struct tag,
+				// set resultNonil so it propagates through variable
+				// assignment (e.g. $s := .S where S is nonil).
+				if _, isPtr := x.(*types.Pointer); isPtr {
+					if s.global.isNonilField(xx, ident) {
+						s.resultNonil = true
+					}
+				}
 			case *types.Func:
 				sig := o.Signature()
 				resultLen := sig.Results().Len()
@@ -505,6 +841,12 @@ func (s *scope) checkRangeNode(tree *parse.Tree, dot types.Type, n *parse.RangeN
 	pipeType, err := child.walk(tree, dot, nil, n.Pipe)
 	if err != nil {
 		return err
+	}
+	// Range iteration variables are structural — don't warn if unused.
+	for _, decl := range n.Pipe.Decl {
+		if len(decl.Ident) > 0 {
+			delete(child.declared, decl.Ident[0])
+		}
 	}
 	pipeType = dereference(pipeType).Underlying()
 	var x types.Type
@@ -579,10 +921,13 @@ func (s *scope) checkRangeNode(tree *parse.Tree, dot types.Type, n *parse.RangeN
 	if _, err := child.walk(tree, x, nil, n.List); err != nil {
 		return err
 	}
+	child.warnUnused(tree)
 	if n.ElseList != nil {
-		if _, err := child.walk(tree, x, nil, n.ElseList); err != nil {
+		elseScope := s.child()
+		if _, err := elseScope.walk(tree, x, nil, n.ElseList); err != nil {
 			return err
 		}
+		elseScope.warnUnused(tree)
 	}
 	return nil
 }
@@ -639,4 +984,68 @@ func dereference(tp types.Type) types.Type {
 		}
 		tp = ptr.Elem()
 	}
+}
+
+// isNonilField reports whether the given field on the given type has a
+// `templatecheck:"nonil"` struct tag. Results are cached on the Global.
+func (g *Global) isNonilField(typ types.Type, fieldName string) bool {
+	if g.nonilFields == nil {
+		g.nonilFields = make(map[*types.Struct]map[string]struct{})
+	}
+	// Use LookupFieldOrMethod to find the field, which handles embedded
+	// structs (e.g. S on a struct that embeds PageData).
+	obj, _, _ := types.LookupFieldOrMethod(typ, true, nil, fieldName)
+	if obj == nil {
+		return false
+	}
+	v, ok := obj.(*types.Var)
+	if !ok || !v.IsField() {
+		return false
+	}
+	// Find the struct that directly declares this field.
+	parent := v.Parent()
+	_ = parent
+	// Walk the type to find which struct contains the field with its tag.
+	return g.fieldHasNonilTag(typ, fieldName)
+}
+
+// fieldHasNonilTag checks direct and embedded struct fields for the nonil tag.
+func (g *Global) fieldHasNonilTag(typ types.Type, fieldName string) bool {
+	st, ok := typ.Underlying().(*types.Struct)
+	if !ok {
+		return false
+	}
+	if fields, cached := g.nonilFields[st]; cached {
+		_, nonil := fields[fieldName]
+		return nonil
+	}
+	// Scan ALL direct fields for nonil tags and recurse into embedded structs.
+	// Cache every tagged field so subsequent lookups for different field names
+	// on the same struct are cache hits.
+	fields := make(map[string]struct{})
+	for i := 0; i < st.NumFields(); i++ {
+		f := st.Field(i)
+		if strings.Contains(st.Tag(i), `templatecheck:"nonil"`) {
+			fields[f.Name()] = struct{}{}
+		}
+		// Recurse into embedded (anonymous) structs to find inherited tags.
+		if f.Anonymous() {
+			embeddedType := f.Type()
+			if ptr, ok := embeddedType.(*types.Pointer); ok {
+				embeddedType = ptr.Elem()
+			}
+			if embSt, ok := embeddedType.Underlying().(*types.Struct); ok {
+				// Ensure embedded struct is scanned first.
+				g.fieldHasNonilTag(embeddedType, "")
+				if cached, ok := g.nonilFields[embSt]; ok {
+					for name := range cached {
+						fields[name] = struct{}{}
+					}
+				}
+			}
+		}
+	}
+	g.nonilFields[st] = fields
+	_, nonil := fields[fieldName]
+	return nonil
 }

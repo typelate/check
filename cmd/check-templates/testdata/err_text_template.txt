@@ -1,7 +1,7 @@
 # text/template should be checked the same as html/template.
 
 ! check-templates
-stderr 'type check failed:.*index\.gotmpl:1:2: executing "index\.gotmpl" at <\.Missing>: Missing not found on example\.com/app\.Page'
+stderr 'index\.gotmpl:1:2: executing "index\.gotmpl" at <\.Missing>: Missing not found on example\.com/app\.Page \(E001\)'
 
 -- go.mod --
 module example.com/app

@@ -1,0 +1,74 @@
+# Template retrieved from a map populated by ParseFiles with non-static paths.
+# The tool traces through loadTemplates helper, resolves glob patterns, and
+# type-checks templates against the concrete Page type passed at call sites.
+
+check-templates
+! stderr .
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- main.go --
+package main
+
+import (
+	"fmt"
+	"html/template"
+	"net/http"
+	"path/filepath"
+)
+
+type Page struct {
+	Title   string
+	Content string
+}
+
+func loadTemplates(root string) map[string]*template.Template {
+	layoutFile := filepath.Join(root, "layouts", "base.html")
+	partialFiles, _ := filepath.Glob(filepath.Join(root, "partials", "*.html"))
+	shared := append([]string{layoutFile}, partialFiles...)
+	pageFiles, _ := filepath.Glob(filepath.Join(root, "pages", "*", "*.html"))
+	templates := make(map[string]*template.Template)
+	for _, page := range pageFiles {
+		files := make([]string, len(shared)+1)
+		copy(files, shared)
+		files[len(shared)] = page
+		t, err := template.ParseFiles(files...)
+		if err != nil {
+			panic(err)
+		}
+		name := filepath.Base(page)
+		templates[name] = t
+	}
+	return templates
+}
+
+func main() {
+	templates := loadTemplates("templates")
+
+	render := func(w http.ResponseWriter, name string, data any) {
+		t, ok := templates[name]
+		if !ok {
+			http.Error(w, "not found", 500)
+			return
+		}
+		_ = t.ExecuteTemplate(w, "base.html", data)
+	}
+
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		render(w, "index.html", Page{Title: "Home", Content: "Welcome"})
+	})
+}
+
+var _ = fmt.Sprint
+
+-- templates/layouts/base.html --
+<h1>{{.Title}}</h1>
+<p>{{.Content}}</p>
+
+-- templates/partials/footer.html --
+<footer>footer</footer>
+
+-- templates/pages/home/index.html --
+{{template "base.html" .}}

@@ -2,7 +2,7 @@
 # call should produce an error.
 
 ! check-templates
-stderr 'type check failed:.*about\.gohtml:1:2: executing "about\.gohtml" at <\.Name>: Name not found on example\.com/app\.IndexPage'
+stderr 'about\.gohtml:1:2: executing "about\.gohtml" at <\.Name>: Name not found on example\.com/app\.IndexPage \(E001\)'
 ! stderr 'Title not found'
 
 -- go.mod --

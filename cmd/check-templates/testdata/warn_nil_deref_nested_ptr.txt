@@ -1,0 +1,49 @@
+# Guarding .Foo does not suppress warning for .Foo.Baz when Baz is a pointer.
+
+check-templates -w
+stderr 'accessing .Value on pointer type \*example.com/app.Baz may panic if nil.* \(W003\)'
+! stderr 'accessing .Baz'
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- main.go --
+package main
+
+import (
+	"embed"
+	"fmt"
+	"html/template"
+	"io"
+)
+
+var (
+	//go:embed *.gohtml
+	source embed.FS
+
+	templates = template.Must(template.New("app").ParseFS(source, "*"))
+)
+
+type Baz struct {
+	Value string
+}
+
+type Foo struct {
+	Baz *Baz
+}
+
+type Page struct {
+	Foo *Foo
+}
+
+func render(p Page) {
+	_ = templates.ExecuteTemplate(io.Discard, "index.gohtml", p)
+}
+
+var _ = fmt.Sprint
+
+-- index.gohtml --
+{{if .Foo}}
+<p>{{.Foo.Baz.Value}}</p>
+{{end}}

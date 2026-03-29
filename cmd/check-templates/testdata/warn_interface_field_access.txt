@@ -1,0 +1,34 @@
+# Warn when accessing fields on an interface type with -w flag.
+
+check-templates -w
+stderr 'field access .Title on interface type any cannot be statically verified \(W004\)'
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- main.go --
+package main
+
+import (
+	"embed"
+	"fmt"
+	"html/template"
+	"io"
+)
+
+var (
+	//go:embed *.gohtml
+	source embed.FS
+
+	templates = template.Must(template.New("app").ParseFS(source, "*"))
+)
+
+func render(data any) {
+	_ = templates.ExecuteTemplate(io.Discard, "index.gohtml", data)
+}
+
+var _ = fmt.Sprint
+
+-- index.gohtml --
+<h1>{{.Title}}</h1>

@@ -1,0 +1,58 @@
+# W003 should not fire when a {{with}} block calls a sub-template with the
+# guarded (non-nil) value as dot. The sub-template's dot is known non-nil
+# because it was passed from inside a {{with}} guard.
+
+check-templates -w
+! stderr 'W003'
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- main.go --
+package main
+
+import (
+	"embed"
+	"fmt"
+	"html/template"
+	"net/http"
+)
+
+//go:embed *.gohtml
+var source embed.FS
+
+var templates = template.Must(template.ParseFS(source, "*"))
+
+type Owner struct {
+	Name  string
+	Email string
+}
+
+type Page struct {
+	Title string
+	Owner *Owner
+}
+
+func handleOwner(w http.ResponseWriter, r *http.Request) {
+	_ = templates.ExecuteTemplate(w, "detail.gohtml", Page{
+		Title: "Owner",
+		Owner: &Owner{Name: "Alice", Email: "alice@example.com"},
+	})
+}
+
+var _ = fmt.Sprint
+
+-- detail.gohtml --
+<h1>{{.Title}}</h1>
+{{with .Owner}}
+{{template "owner-card.gohtml" .}}
+{{end}}
+
+-- owner-card.gohtml --
+{{define "owner-card.gohtml"}}
+<div class="card">
+    <p>{{.Name}}</p>
+    <p>{{.Email}}</p>
+</div>
+{{end}}

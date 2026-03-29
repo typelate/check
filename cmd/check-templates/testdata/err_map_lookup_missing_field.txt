@@ -1,0 +1,45 @@
+# Template retrieved from a map, accessed via closure, catches missing field errors.
+
+! check-templates
+stderr 'base\.html.*Missing not found on example\.com/app\.Page \(E001\)'
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- main.go --
+package main
+
+import (
+	"fmt"
+	"html/template"
+	"net/http"
+)
+
+type Page struct {
+	Title string
+}
+
+func main() {
+	templates := make(map[string]*template.Template)
+	templates["index"] = template.Must(template.ParseFiles("templates/base.html"))
+
+	render := func(w http.ResponseWriter, name string, data any) {
+		t, ok := templates[name]
+		if !ok {
+			http.Error(w, "not found", 500)
+			return
+		}
+		_ = t.ExecuteTemplate(w, "base.html", data)
+	}
+
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		render(w, "index", Page{Title: "Home"})
+	})
+}
+
+var _ = fmt.Sprint
+
+-- templates/base.html --
+<h1>{{.Title}}</h1>
+<p>{{.Missing}}</p>

@@ -1,0 +1,51 @@
+# Template check catches field errors when a closure is passed as a function
+# argument to another package and the concrete type flows through indirectly.
+
+! check-templates ./...
+stderr 'base\.html:2:5: executing "base\.html" at <\.Missing>: Missing not found on example\.com/app/handlers\.Page \(E001\)'
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- main.go --
+package main
+
+import (
+	"html/template"
+	"net/http"
+
+	"example.com/app/handlers"
+)
+
+func main() {
+	t := template.Must(template.ParseFiles("templates/base.html"))
+
+	render := func(w http.ResponseWriter, data any) {
+		_ = t.ExecuteTemplate(w, "base.html", data)
+	}
+
+	http.HandleFunc("/", handlers.HandleIndex(render))
+}
+-- handlers/handler.go --
+package handlers
+
+import (
+	"fmt"
+	"net/http"
+)
+
+type Page struct {
+	Title string
+}
+
+func HandleIndex(render func(http.ResponseWriter, any)) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		render(w, Page{Title: "Home"})
+	}
+}
+
+var _ = fmt.Sprint
+-- templates/base.html --
+<h1>{{.Title}}</h1>
+<p>{{.Missing}}</p>

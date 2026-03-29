@@ -1,0 +1,54 @@
+# W003 is suppressed for nonil-tagged fields inherited through struct
+# embedding. The tag on PageData.S applies even when accessed through
+# a struct that embeds PageData.
+
+check-templates -w
+! stderr 'config.Strings'
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- main.go --
+package main
+
+import (
+	"embed"
+	"fmt"
+	"html/template"
+	"net/http"
+)
+
+//go:embed *.gohtml
+var source embed.FS
+
+var templates = template.Must(template.ParseFS(source, "*"))
+
+type Strings struct {
+	AppName string
+	Welcome string
+}
+
+type PageData struct {
+	Title string
+	S     *Strings `templatecheck:"nonil"`
+}
+
+type DashboardPage struct {
+	PageData
+	ItemCount int
+}
+
+func handleDashboard(w http.ResponseWriter, r *http.Request) {
+	_ = templates.ExecuteTemplate(w, "dashboard.gohtml", DashboardPage{
+		PageData:  PageData{Title: "Dashboard", S: &Strings{AppName: "MyApp", Welcome: "Hi"}},
+		ItemCount: 42,
+	})
+}
+
+var _ = fmt.Sprint
+
+-- dashboard.gohtml --
+<h1>{{.S.AppName}}</h1>
+{{$s := .S}}
+<p>{{$s.Welcome}}, you have {{.ItemCount}} items.</p>

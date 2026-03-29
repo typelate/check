@@ -1,0 +1,54 @@
+# W003 should not fire inside a {{with}} block when a nonil-tagged variable
+# is also accessed. The nonil variable's temporary "." guard must not clobber
+# the {{with}} block's "." guard.
+
+check-templates -w
+! stderr 'W003'
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- main.go --
+package main
+
+import (
+	"embed"
+	"fmt"
+	"html/template"
+	"net/http"
+)
+
+//go:embed *.gohtml
+var source embed.FS
+
+var templates = template.Must(template.ParseFS(source, "*"))
+
+type Strings struct {
+	Title   string
+	Welcome string
+}
+
+type Owner struct {
+	Name string
+}
+
+type Page struct {
+	S     *Strings `templatecheck:"nonil"`
+	Owner *Owner
+}
+
+func handleOwner(w http.ResponseWriter, r *http.Request) {
+	_ = templates.ExecuteTemplate(w, "detail.gohtml", Page{
+		S:     &Strings{Title: "App", Welcome: "Hi"},
+		Owner: &Owner{Name: "Alice"},
+	})
+}
+
+var _ = fmt.Sprint
+
+-- detail.gohtml --
+{{$s := .S}}
+{{with .Owner}}
+<h1>{{$s.Title}}: {{.Name}}</h1>
+{{end}}

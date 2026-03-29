@@ -8,8 +8,10 @@ import (
 	"go/token"
 	"go/types"
 	"io"
+	"path/filepath"
 	"reflect"
 	"runtime"
+	"strings"
 	"slices"
 	"strconv"
 	"testing"
@@ -81,7 +83,7 @@ func TestExec(t *testing.T) {
 	require.True(t, ok, "failed to find current file name")
 	fileIndex := slices.IndexFunc(testPkg.Syntax, func(file *ast.File) bool {
 		pos := testPkg.Fset.Position(file.Pos())
-		return pos.Filename == currentFileName
+		return strings.EqualFold(filepath.Clean(pos.Filename), filepath.Clean(currentFileName))
 	})
 	if fileIndex < 0 {
 		t.Fatal("no stdlib_test.go found")

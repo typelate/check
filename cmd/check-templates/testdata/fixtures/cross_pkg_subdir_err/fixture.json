@@ -1,0 +1,7 @@
+{
+  "flags": [],
+  "wantExitCode": 1,
+  "wantStderr": [
+    "pkg/templates/page.gotmpl:4:11: executing \"page.gotmpl\" at <.Missing>: Missing not found on example.com/app/pkg.Page (E001)"
+  ]
+}

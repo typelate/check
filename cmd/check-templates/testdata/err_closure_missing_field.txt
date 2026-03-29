@@ -1,7 +1,7 @@
 # Template parsed in outer function, closure calls ExecuteTemplate with missing field.
 
 ! check-templates
-stderr 'type check failed:.*index\.gohtml:1:6: executing "index\.gohtml" at <\.Missing>: Missing not found on example\.com/app\.Page'
+stderr 'index\.gohtml:1:6: executing "index\.gohtml" at <\.Missing>: Missing not found on example\.com/app\.Page \(E001\)'
 
 -- go.mod --
 module example.com/app

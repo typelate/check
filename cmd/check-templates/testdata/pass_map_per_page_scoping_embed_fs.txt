@@ -1,0 +1,109 @@
+# Per-page template scoping with embed.FS passed as a function parameter.
+# Uses fs.Glob and ParseFS with path.Base/path.Dir — the pattern used by
+# applications that pass embed.FS through constructor functions.
+
+check-templates ./...
+! stderr .
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- assets.go --
+package app
+
+import "embed"
+
+//go:embed templates/layouts/*.html templates/pages/*/*.html
+var TemplatesFS embed.FS
+-- web/web.go --
+package web
+
+import (
+	"fmt"
+	"html/template"
+	"io/fs"
+	"net/http"
+	"path"
+)
+
+type OwnersPage struct {
+	Title  string
+	Owners []string
+}
+
+type VehiclesPage struct {
+	Title    string
+	Vehicles []string
+}
+
+func New(fsys fs.FS) http.Handler {
+	templates := loadTemplates(fsys)
+
+	render := func(w http.ResponseWriter, name string, data any) {
+		t, ok := templates[name]
+		if !ok {
+			http.Error(w, "not found", 500)
+			return
+		}
+		_ = t.ExecuteTemplate(w, "base.html", data)
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/owners", func(w http.ResponseWriter, r *http.Request) {
+		render(w, "owners/list.html", OwnersPage{Title: "Owners", Owners: []string{"Alice"}})
+	})
+	mux.HandleFunc("/vehicles", func(w http.ResponseWriter, r *http.Request) {
+		render(w, "vehicles/list.html", VehiclesPage{Title: "Vehicles", Vehicles: []string{"Car"}})
+	})
+	return mux
+}
+
+func loadTemplates(fsys fs.FS) map[string]*template.Template {
+	layoutFile := "templates/layouts/base.html"
+	pageFiles, _ := fs.Glob(fsys, "templates/pages/*/*.html")
+	templates := make(map[string]*template.Template)
+	for _, page := range pageFiles {
+		dir := path.Dir(page)
+		name := path.Base(dir) + "/" + path.Base(page)
+		files := []string{layoutFile, page}
+		t, err := template.New("").ParseFS(fsys, files...)
+		if err != nil {
+			panic(err)
+		}
+		templates[name] = t
+	}
+	return templates
+}
+
+var _ = fmt.Sprint
+-- cmd/server/main.go --
+package main
+
+import (
+	"fmt"
+	"net/http"
+
+	app "example.com/app"
+	"example.com/app/web"
+)
+
+func main() {
+	handler := web.New(app.TemplatesFS)
+	_ = http.ListenAndServe(":8080", handler)
+}
+
+var _ = fmt.Sprint
+-- templates/layouts/base.html --
+<h1>{{.Title}}</h1>
+{{template "content" .}}
+
+-- templates/pages/owners/list.html --
+{{define "content"}}
+<ul>{{range .Owners}}<li>{{.}}</li>{{end}}</ul>
+{{end}}
+
+-- templates/pages/vehicles/list.html --
+{{define "content"}}
+<ul>{{range .Vehicles}}<li>{{.}}</li>{{end}}</ul>
+{{end}}

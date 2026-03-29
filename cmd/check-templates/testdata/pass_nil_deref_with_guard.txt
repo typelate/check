@@ -1,0 +1,50 @@
+# W003 should not fire for field access inside {{with}} on a pointer field.
+# {{with .Owner}} guards against nil — the body only executes when Owner
+# is non-nil, so accessing fields on the dereferenced value is safe.
+
+check-templates -w
+! stderr 'W003'
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- main.go --
+package main
+
+import (
+	"embed"
+	"fmt"
+	"html/template"
+	"net/http"
+)
+
+//go:embed *.gohtml
+var source embed.FS
+
+var templates = template.Must(template.ParseFS(source, "*"))
+
+type Owner struct {
+	ID   int
+	Name string
+}
+
+type Page struct {
+	Title string
+	Owner *Owner
+}
+
+func handleOwner(w http.ResponseWriter, r *http.Request) {
+	_ = templates.ExecuteTemplate(w, "detail.gohtml", Page{
+		Title: "Owner",
+		Owner: &Owner{ID: 1, Name: "Alice"},
+	})
+}
+
+var _ = fmt.Sprint
+
+-- detail.gohtml --
+<h1>{{.Title}}</h1>
+{{with .Owner}}
+<p>{{.Name}} (ID: {{.ID}})</p>
+{{end}}

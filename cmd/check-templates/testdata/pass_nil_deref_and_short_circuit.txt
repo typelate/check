@@ -1,0 +1,68 @@
+# W003 should not fire for pointer access in later arguments of "and"
+# when an earlier argument establishes nil-safety via short-circuit.
+# Go's template "and" evaluates left-to-right and returns the first
+# falsy value, so later args are only reached when earlier ones are non-nil.
+
+check-templates -w
+! stderr 'W003'
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- main.go --
+package main
+
+import (
+	"embed"
+	"fmt"
+	"html/template"
+	"net/http"
+)
+
+//go:embed *.gohtml
+var source embed.FS
+
+var templates = template.Must(template.ParseFS(source, "*"))
+
+type User struct {
+	Role     string
+	Username string
+}
+
+type Page struct {
+	Title string
+	User  *User
+	Items []string
+}
+
+func handleIndex(w http.ResponseWriter, r *http.Request) {
+	_ = templates.ExecuteTemplate(w, "index.gohtml", Page{
+		Title: "Home",
+		User:  &User{Role: "admin", Username: "alice"},
+		Items: []string{"a", "b"},
+	})
+}
+
+var _ = fmt.Sprint
+
+-- index.gohtml --
+<h1>{{.Title}}</h1>
+
+{{/* and with dot-field reference */}}
+{{if and .User (eq .User.Role "admin")}}
+<p>Admin: {{.User.Username}}</p>
+{{end}}
+
+{{/* and with $-field reference */}}
+{{range .Items}}
+{{if and $.User (eq $.User.Role "admin")}}
+<span>{{$.User.Username}}</span>
+{{end}}
+{{end}}
+
+{{/* and with variable */}}
+{{$u := .User}}
+{{if and $u (eq $u.Role "admin")}}
+<p>{{$u.Username}}</p>
+{{end}}

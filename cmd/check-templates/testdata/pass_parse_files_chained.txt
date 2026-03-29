@@ -1,0 +1,32 @@
+# template.New().ParseFiles() chained pattern passes type checking.
+
+check-templates
+! stderr .
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- main.go --
+package main
+
+import (
+	"fmt"
+	"html/template"
+	"net/http"
+)
+
+var templates = template.Must(template.New("app").ParseFiles("templates/index.html"))
+
+type Page struct {
+	Title string
+}
+
+func handleIndex(w http.ResponseWriter, r *http.Request) {
+	_ = templates.ExecuteTemplate(w, "index.html", Page{Title: "Home"})
+}
+
+var _ = fmt.Sprint
+
+-- templates/index.html --
+<h1>{{.Title}}</h1>

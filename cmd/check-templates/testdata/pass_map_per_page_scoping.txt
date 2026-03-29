@@ -1,0 +1,83 @@
+# Per-page template scoping: when templates are stored in a map per page,
+# each render call is checked against only the template set for that page.
+# This prevents cross-page type contamination (e.g. Page1's fields being
+# checked against Page2's {{define "content"}} block).
+
+check-templates ./...
+! stderr .
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- main.go --
+package main
+
+import (
+	"fmt"
+	"html/template"
+	"net/http"
+	"path/filepath"
+)
+
+type OwnersPage struct {
+	Title  string
+	Owners []string
+}
+
+type VehiclesPage struct {
+	Title    string
+	Vehicles []string
+}
+
+func loadTemplates(root string) map[string]*template.Template {
+	layoutFile := filepath.Join(root, "layouts", "base.html")
+	pageFiles, _ := filepath.Glob(filepath.Join(root, "pages", "*", "*.html"))
+	templates := make(map[string]*template.Template)
+	for _, page := range pageFiles {
+		name := filepath.Base(filepath.Dir(page)) + "/" + filepath.Base(page)
+		files := []string{layoutFile, page}
+		t, err := template.ParseFiles(files...)
+		if err != nil {
+			panic(err)
+		}
+		templates[name] = t
+	}
+	return templates
+}
+
+func main() {
+	templates := loadTemplates("templates")
+
+	render := func(w http.ResponseWriter, name string, data any) {
+		t, ok := templates[name]
+		if !ok {
+			http.Error(w, "not found", 500)
+			return
+		}
+		_ = t.ExecuteTemplate(w, "base.html", data)
+	}
+
+	http.HandleFunc("/owners", func(w http.ResponseWriter, r *http.Request) {
+		render(w, "owners/list.html", OwnersPage{Title: "Owners", Owners: []string{"Alice"}})
+	})
+	http.HandleFunc("/vehicles", func(w http.ResponseWriter, r *http.Request) {
+		render(w, "vehicles/list.html", VehiclesPage{Title: "Vehicles", Vehicles: []string{"Car"}})
+	})
+}
+
+var _ = fmt.Sprint
+
+-- templates/layouts/base.html --
+<h1>{{.Title}}</h1>
+{{template "content" .}}
+
+-- templates/pages/owners/list.html --
+{{define "content"}}
+<ul>{{range .Owners}}<li>{{.}}</li>{{end}}</ul>
+{{end}}
+
+-- templates/pages/vehicles/list.html --
+{{define "content"}}
+<ul>{{range .Vehicles}}<li>{{.}}</li>{{end}}</ul>
+{{end}}

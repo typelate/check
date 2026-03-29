@@ -1,0 +1,61 @@
+# ParseFS called with an fs.FS function parameter that originates from
+# a package-level embed.FS in another package. The tool should trace
+# through function parameters across packages to find the //go:embed var.
+
+check-templates ./...
+! stderr .
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- assets.go --
+package app
+
+import "embed"
+
+//go:embed templates/*.gohtml
+var TemplatesFS embed.FS
+-- web/web.go --
+package web
+
+import (
+	"fmt"
+	"html/template"
+	"io/fs"
+	"net/http"
+)
+
+type Page struct {
+	Title string
+}
+
+func New(fsys fs.FS) http.Handler {
+	ts := template.Must(template.New("").ParseFS(fsys, "templates/*.gohtml"))
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		_ = ts.ExecuteTemplate(w, "index.gohtml", Page{Title: "Home"})
+	})
+	return mux
+}
+
+var _ = fmt.Sprint
+-- cmd/server/main.go --
+package main
+
+import (
+	"fmt"
+	"net/http"
+
+	app "example.com/app"
+	"example.com/app/web"
+)
+
+func main() {
+	handler := web.New(app.TemplatesFS)
+	_ = http.ListenAndServe(":8080", handler)
+}
+
+var _ = fmt.Sprint
+-- templates/index.gohtml --
+<h1>{{.Title}}</h1>

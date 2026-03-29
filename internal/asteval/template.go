@@ -1,10 +1,8 @@
 package asteval
 
 import (
-	"bytes"
 	"fmt"
 	"go/ast"
-	"go/format"
 	"go/token"
 	"go/types"
 	"os"
@@ -17,6 +15,15 @@ import (
 
 	"github.com/typelate/check/internal/astgen"
 )
+
+// EmbedFSResolver is a callback that resolves an fs.FS identifier (typically
+// a function parameter) to its embedded file paths by tracing through the
+// call graph. It is called when embedFSFilePaths cannot find a package-level
+// var declaration for the identifier. The resolver receives the identifier
+// expression and the types.Info for the package containing the ParseFS call.
+// It returns the list of relative embedded file paths and the working
+// directory of the package that owns the //go:embed var, or an error.
+type EmbedFSResolver func(info *types.Info, files []*ast.File, fsIdent *ast.Ident) (paths []string, workingDir string, err error)
 
 // Template abstracts over html/template.Template and text/template.Template
 // so that the correct template package is used based on the user's import.
@@ -31,6 +38,7 @@ type Template interface {
 	AddParseTree(name string, tree *parse.Tree) (Template, error)
 	Tree() *parse.Tree
 	FindTree(name string) (*parse.Tree, bool)
+	TemplateNames() []string
 }
 
 // TemplateMetadata accumulates metadata during template evaluation.
@@ -39,7 +47,7 @@ type TemplateMetadata struct {
 	ParseCalls     []*ast.BasicLit
 }
 
-func EvaluateTemplateSelector(ts Template, pkg *types.Package, typesInfo *types.Info, expression ast.Expr, workingDirectory, templatesVariable, rDelim, lDelim string, fileSet *token.FileSet, files []*ast.File, embeddedPaths []string, funcTypeMaps TemplateFunctions, fm map[string]any, meta *TemplateMetadata) (Template, string, string, error) {
+func EvaluateTemplateSelector(ts Template, pkg *types.Package, typesInfo *types.Info, expression ast.Expr, workingDirectory, templatesVariable, rDelim, lDelim string, fileSet *token.FileSet, files []*ast.File, embeddedPaths []string, funcTypeMaps TemplateFunctions, fm map[string]any, meta *TemplateMetadata, sliceCtx *SliceEvalContext, embedFSResolver EmbedFSResolver) (Template, string, string, error) {
 	call, ok := expression.(*ast.CallExpr)
 	if !ok {
 		return nil, lDelim, rDelim, wrapWithFilename(workingDirectory, fileSet, expression.Pos(), fmt.Errorf("expected call expression"))
@@ -59,7 +67,7 @@ func EvaluateTemplateSelector(ts Template, pkg *types.Package, typesInfo *types.
 			// Variable receiver — apply method to existing template.
 			switch sel.Sel.Name {
 			case "ParseFS":
-				filePaths, err := evaluateCallParseFilesArgs(workingDirectory, fileSet, call, files, embeddedPaths)
+				filePaths, err := evaluateCallParseFilesArgs(workingDirectory, fileSet, call, files, embeddedPaths, typesInfo, embedFSResolver, sliceCtx)
 				if err != nil {
 					return nil, lDelim, rDelim, err
 				}
@@ -68,6 +76,20 @@ func EvaluateTemplateSelector(ts Template, pkg *types.Package, typesInfo *types.
 				}
 				pkgPath := templatePkgPath(typesInfo, x)
 				t, err := parseFiles(ts, pkgPath, fm, lDelim, rDelim, filePaths...)
+				return t, lDelim, rDelim, err
+			case "ParseFiles":
+				filePaths, err := evaluateParseFilesArgs(workingDirectory, fileSet, call, sliceCtx)
+				if err != nil {
+					return nil, lDelim, rDelim, err
+				}
+				t, err := parseFiles(ts, "", fm, lDelim, rDelim, filePaths...)
+				return t, lDelim, rDelim, err
+			case "ParseGlob":
+				filePaths, err := evaluateParseGlobArgs(workingDirectory, fileSet, call)
+				if err != nil {
+					return nil, lDelim, rDelim, err
+				}
+				t, err := parseFiles(ts, "", fm, lDelim, rDelim, filePaths...)
 				return t, lDelim, rDelim, err
 			case "Parse":
 				if len(call.Args) != 1 {
@@ -114,7 +136,7 @@ func EvaluateTemplateSelector(ts Template, pkg *types.Package, typesInfo *types.
 			if len(call.Args) != 1 {
 				return nil, lDelim, rDelim, wrapWithFilename(workingDirectory, fileSet, call.Lparen, fmt.Errorf("expected exactly one argument %s got %d", astgen.Format(sel.X), len(call.Args)))
 			}
-			return EvaluateTemplateSelector(ts, pkg, typesInfo, call.Args[0], workingDirectory, templatesVariable, rDelim, lDelim, fileSet, files, embeddedPaths, funcTypeMaps, fm, meta)
+			return EvaluateTemplateSelector(ts, pkg, typesInfo, call.Args[0], workingDirectory, templatesVariable, rDelim, lDelim, fileSet, files, embeddedPaths, funcTypeMaps, fm, meta, sliceCtx, embedFSResolver)
 		case "New":
 			if len(call.Args) != 1 {
 				return nil, lDelim, rDelim, wrapWithFilename(workingDirectory, fileSet, call.Lparen, fmt.Errorf("expected exactly one string literal argument"))
@@ -125,7 +147,7 @@ func EvaluateTemplateSelector(ts Template, pkg *types.Package, typesInfo *types.
 			}
 			return NewTemplate(pkgPath, templateNames[0]), lDelim, rDelim, nil
 		case "ParseFS":
-			filePaths, err := evaluateCallParseFilesArgs(workingDirectory, fileSet, call, files, embeddedPaths)
+			filePaths, err := evaluateCallParseFilesArgs(workingDirectory, fileSet, call, files, embeddedPaths, typesInfo, embedFSResolver, sliceCtx)
 			if err != nil {
 				return nil, lDelim, rDelim, err
 			}
@@ -134,11 +156,25 @@ func EvaluateTemplateSelector(ts Template, pkg *types.Package, typesInfo *types.
 			}
 			t, err := parseFiles(nil, pkgPath, fm, lDelim, rDelim, filePaths...)
 			return t, lDelim, rDelim, err
+		case "ParseFiles":
+			filePaths, err := evaluateParseFilesArgs(workingDirectory, fileSet, call, sliceCtx)
+			if err != nil {
+				return nil, lDelim, rDelim, err
+			}
+			t, err := parseFiles(nil, pkgPath, fm, lDelim, rDelim, filePaths...)
+			return t, lDelim, rDelim, err
+		case "ParseGlob":
+			filePaths, err := evaluateParseGlobArgs(workingDirectory, fileSet, call)
+			if err != nil {
+				return nil, lDelim, rDelim, err
+			}
+			t, err := parseFiles(nil, pkgPath, fm, lDelim, rDelim, filePaths...)
+			return t, lDelim, rDelim, err
 		default:
 			return nil, lDelim, rDelim, wrapWithFilename(workingDirectory, fileSet, call.Fun.Pos(), fmt.Errorf("unsupported function %s", sel.Sel.Name))
 		}
 	case *ast.CallExpr:
-		up, upLDelim, upRDelim, err := EvaluateTemplateSelector(ts, pkg, typesInfo, sel.X, workingDirectory, templatesVariable, rDelim, lDelim, fileSet, files, embeddedPaths, funcTypeMaps, fm, meta)
+		up, upLDelim, upRDelim, err := EvaluateTemplateSelector(ts, pkg, typesInfo, sel.X, workingDirectory, templatesVariable, rDelim, lDelim, fileSet, files, embeddedPaths, funcTypeMaps, fm, meta, sliceCtx, embedFSResolver)
 		if err != nil {
 			return nil, lDelim, rDelim, err
 		}
@@ -177,12 +213,26 @@ func EvaluateTemplateSelector(ts Template, pkg *types.Package, typesInfo *types.
 			}
 			return up.New(templateNames[0]), upLDelim, upRDelim, nil
 		case "ParseFS":
-			filePaths, err := evaluateCallParseFilesArgs(workingDirectory, fileSet, call, files, embeddedPaths)
+			filePaths, err := evaluateCallParseFilesArgs(workingDirectory, fileSet, call, files, embeddedPaths, typesInfo, embedFSResolver, sliceCtx)
 			if err != nil {
 				return nil, upLDelim, upRDelim, err
 			}
 			if meta != nil {
 				meta.EmbedFilePaths = append(meta.EmbedFilePaths, filePaths...)
+			}
+			t, err := parseFiles(up, "", fm, upLDelim, upRDelim, filePaths...)
+			return t, upLDelim, upRDelim, err
+		case "ParseFiles":
+			filePaths, err := evaluateParseFilesArgs(workingDirectory, fileSet, call, sliceCtx)
+			if err != nil {
+				return nil, upLDelim, upRDelim, err
+			}
+			t, err := parseFiles(up, "", fm, upLDelim, upRDelim, filePaths...)
+			return t, upLDelim, upRDelim, err
+		case "ParseGlob":
+			filePaths, err := evaluateParseGlobArgs(workingDirectory, fileSet, call)
+			if err != nil {
+				return nil, upLDelim, upRDelim, err
 			}
 			t, err := parseFiles(up, "", fm, upLDelim, upRDelim, filePaths...)
 			return t, upLDelim, upRDelim, err
@@ -325,11 +375,17 @@ func parseFiles(t Template, pkgPath string, fm map[string]any, leftDelim, rightD
 		} else {
 			tmpl = t.New(templateName)
 		}
-		trees, err := parse.Parse(templateName, s, leftDelim, rightDelim, fm, builtins())
+		absoluteFilename, err := filepath.Abs(filename)
 		if err != nil {
 			return nil, err
 		}
-		absoluteFilename, err := filepath.Abs(filename)
+		trees, err := parse.Parse(templateName, s, leftDelim, rightDelim, fm, builtins())
+		if err != nil {
+			// parse.Parse errors use the template name (e.g. "template: index.gohtml:1: ...").
+			// Replace it with the absolute file path and reformat as "file:line:col: message"
+			// so the CLI and VS Code extension can parse the location.
+			return nil, normalizeParseError(err, templateName, absoluteFilename)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -341,6 +397,24 @@ func parseFiles(t Template, pkgPath string, fm map[string]any, leftDelim, rightD
 		}
 	}
 	return t, nil
+}
+
+// normalizeParseError rewrites a text/template/parse error from the form
+// "template: name:line: message" into "filepath:line:1: message (E001)" so
+// that the CLI output and VS Code extension can parse the location.
+func normalizeParseError(err error, templateName, absFilename string) error {
+	msg := err.Error()
+	prefix := "template: " + templateName + ":"
+	if !strings.HasPrefix(msg, prefix) {
+		return fmt.Errorf("%s:1:1: %s (E001)", absFilename, msg)
+	}
+	rest := msg[len(prefix):] // "3: unexpected ..."
+	if i := strings.Index(rest, ": "); i >= 0 {
+		line := rest[:i]
+		message := rest[i+2:]
+		return fmt.Errorf("%s:%s:1: %s (E001)", absFilename, line, message)
+	}
+	return fmt.Errorf("%s:1:1: %s (E001)", absFilename, msg)
 }
 
 func evaluateFuncMap(workingDirectory string, typesInfo *types.Info, pkg *types.Package, fileSet *token.FileSet, call *ast.CallExpr, fm map[string]any, funcTypesMap TemplateFunctions) error {
@@ -365,7 +439,6 @@ func evaluateFuncMap(workingDirectory string, typesInfo *types.Info, pkg *types.
 			}
 		}
 	}
-	var buf bytes.Buffer
 	for i, exp := range lit.Elts {
 		el, ok := exp.(*ast.KeyValueExpr)
 		if !ok {
@@ -389,38 +462,54 @@ func evaluateFuncMap(workingDirectory string, typesInfo *types.Info, pkg *types.
 		//   fm[funcName] = func() (int, int) {return 0, 0} // will fail because the second result is not an error
 		fm[funcName] = fmt.Sprintln
 
-		if pkg == nil {
-			continue
+		if typesInfo != nil {
+			if tp := typesInfo.TypeOf(el.Value); tp != nil {
+				if sig, ok := tp.(*types.Signature); ok {
+					funcTypesMap[funcName] = sig
+				}
+			}
 		}
-		buf.Reset()
-		if err := format.Node(&buf, fileSet, el.Value); err != nil {
-			return err
-		}
-		tv, err := types.Eval(fileSet, pkg, lit.Pos(), buf.String())
-		if err != nil {
-			return err
-		}
-		funcTypesMap[funcName] = tv.Type.(*types.Signature)
 	}
 	return nil
 }
 
-func evaluateCallParseFilesArgs(workingDirectory string, fileSet *token.FileSet, call *ast.CallExpr, files []*ast.File, embeddedPaths []string) ([]string, error) {
+func evaluateCallParseFilesArgs(workingDirectory string, fileSet *token.FileSet, call *ast.CallExpr, files []*ast.File, embeddedPaths []string, typesInfo *types.Info, embedFSResolver EmbedFSResolver, sliceCtx *SliceEvalContext) ([]string, error) {
 	if len(call.Args) < 1 {
 		return nil, wrapWithFilename(workingDirectory, fileSet, call.Lparen, fmt.Errorf("missing required arguments"))
 	}
-	matches, err := embedFSFilePaths(workingDirectory, fileSet, files, call.Args[0], embeddedPaths)
+	matches, sourceDir, err := embedFSFilePaths(workingDirectory, fileSet, files, call.Args[0], embeddedPaths, typesInfo, embedFSResolver)
 	if err != nil {
 		return nil, err
 	}
+	// Use the source package's directory when the embed was resolved from
+	// a different package (e.g. via function parameter tracing).
+	joinDir := workingDirectory
+	if sourceDir != "" {
+		joinDir = sourceDir
+	}
+
+	// Try string literals first.
 	templateNames, err := StringLiteralExpressionList(workingDirectory, fileSet, call.Args[1:])
 	if err != nil {
-		return nil, err
+		// Fall back to resolving non-literal args via SliceEvalContext
+		// (e.g. ParseFS(fsys, files...) where files is a []string variable).
+		templateNames, err = resolveParseFilesPatterns(workingDirectory, fileSet, call, sliceCtx)
+		if err != nil {
+			return nil, err
+		}
 	}
+
+	// If no pattern arguments could be resolved, skip filtering and return
+	// all embedded files. This is conservative but avoids false positives
+	// for dynamically-constructed pattern lists.
+	if len(templateNames) == 0 {
+		return joinFilePaths(joinDir, matches...), nil
+	}
+
 	filtered := matches[:0]
 	for _, ef := range matches {
 		for j, pattern := range templateNames {
-			match, err := filepath.Match(pattern, ef)
+			match, err := filepath.Match(filepath.FromSlash(pattern), ef)
 			if err != nil {
 				return nil, wrapWithFilename(workingDirectory, fileSet, call.Args[j+1].Pos(), fmt.Errorf("bad pattern %q: %w", pattern, err))
 			}
@@ -431,13 +520,121 @@ func evaluateCallParseFilesArgs(workingDirectory string, fileSet *token.FileSet,
 			break
 		}
 	}
-	return joinFilePaths(workingDirectory, filtered...), nil
+	return joinFilePaths(joinDir, filtered...), nil
 }
 
-func embedFSFilePaths(dir string, fileSet *token.FileSet, files []*ast.File, exp ast.Expr, embeddedFiles []string) ([]string, error) {
+// resolveParseFilesPatterns resolves non-literal ParseFS pattern arguments
+// (e.g. a spread []string variable) via the SliceEvalContext.
+// resolveParseFilesPatterns resolves non-literal ParseFS pattern arguments
+// (e.g. a spread []string variable) via the SliceEvalContext. Returns nil, nil
+// when resolution is not possible (caller should skip filtering).
+func resolveParseFilesPatterns(workingDirectory string, fileSet *token.FileSet, call *ast.CallExpr, sliceCtx *SliceEvalContext) ([]string, error) {
+	if sliceCtx == nil {
+		return nil, nil
+	}
+	patternArgs := call.Args[1:]
+	// Handle spread call: ParseFS(fsys, files...)
+	if call.Ellipsis.IsValid() && len(patternArgs) == 1 {
+		resolved, ok := ResolveStringSliceExpr(sliceCtx, patternArgs[0])
+		if !ok {
+			return nil, nil
+		}
+		return resolved, nil
+	}
+	// Handle individual non-literal args.
+	result := make([]string, 0, len(patternArgs))
+	for _, arg := range patternArgs {
+		s, ok := sliceCtx.resolveString(arg)
+		if !ok {
+			return nil, nil
+		}
+		result = append(result, s)
+	}
+	return result, nil
+}
+
+func evaluateParseFilesArgs(workingDirectory string, fileSet *token.FileSet, call *ast.CallExpr, sliceCtx *SliceEvalContext) ([]string, error) {
+	if len(call.Args) < 1 {
+		return nil, wrapWithFilename(workingDirectory, fileSet, call.Lparen, fmt.Errorf("missing required arguments"))
+	}
+
+	// Fast path: all arguments are string literals.
+	filePaths, err := StringLiteralExpressionList(workingDirectory, fileSet, call.Args)
+	if err == nil {
+		for i, fp := range filePaths {
+			if !filepath.IsAbs(fp) {
+				filePaths[i] = filepath.Join(workingDirectory, fp)
+			}
+		}
+		return filePaths, nil
+	}
+
+	// Slow path: try resolving via the string-slice evaluator.
+	if sliceCtx == nil {
+		return nil, err
+	}
+
+	// Handle spread call: ParseFiles(files...)
+	if call.Ellipsis.IsValid() && len(call.Args) == 1 {
+		resolved, ok := ResolveStringSliceExpr(sliceCtx, call.Args[0])
+		if !ok {
+			return nil, wrapWithFilename(workingDirectory, fileSet, call.Args[0].Pos(), fmt.Errorf("could not resolve spread argument"))
+		}
+		// Use the slice context's working directory (typically the module
+		// root) for relative paths, since these come from runtime-relative
+		// filepath.Join calls, not package-relative embed paths.
+		wd := sliceCtx.WorkingDirectory
+		for i, fp := range resolved {
+			if !filepath.IsAbs(fp) {
+				resolved[i] = filepath.Join(wd, fp)
+			}
+		}
+		return resolved, nil
+	}
+
+	// Handle individual non-literal args.
+	filePaths = make([]string, 0, len(call.Args))
+	for _, arg := range call.Args {
+		s, ok := sliceCtx.resolveString(arg)
+		if !ok {
+			return nil, wrapWithFilename(workingDirectory, fileSet, arg.Pos(), fmt.Errorf("could not resolve argument"))
+		}
+		if !filepath.IsAbs(s) {
+			s = filepath.Join(workingDirectory, s)
+		}
+		filePaths = append(filePaths, s)
+	}
+	return filePaths, nil
+}
+
+func evaluateParseGlobArgs(workingDirectory string, fileSet *token.FileSet, call *ast.CallExpr) ([]string, error) {
+	if len(call.Args) != 1 {
+		return nil, wrapWithFilename(workingDirectory, fileSet, call.Lparen, fmt.Errorf("expected exactly one string literal argument"))
+	}
+	pattern, err := StringLiteralExpression(workingDirectory, fileSet, call.Args[0])
+	if err != nil {
+		return nil, err
+	}
+	if !filepath.IsAbs(pattern) {
+		pattern = filepath.Join(workingDirectory, pattern)
+	}
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		return nil, wrapWithFilename(workingDirectory, fileSet, call.Args[0].Pos(), fmt.Errorf("bad pattern %q: %w", pattern, err))
+	}
+	if len(matches) == 0 {
+		return nil, wrapWithFilename(workingDirectory, fileSet, call.Args[0].Pos(), fmt.Errorf("pattern %q matched no files", pattern))
+	}
+	return matches, nil
+}
+
+// embedFSFilePaths resolves the fs.FS expression to embedded file paths.
+// It returns the matched paths, an optional override working directory
+// (non-empty when the embed comes from a different package), and any error.
+func embedFSFilePaths(dir string, fileSet *token.FileSet, files []*ast.File, exp ast.Expr, embeddedFiles []string, typesInfo *types.Info, resolver EmbedFSResolver) (paths []string, sourceDir string, err error) {
 	varIdent, ok := exp.(*ast.Ident)
 	if !ok {
-		return nil, wrapWithFilename(dir, fileSet, exp.Pos(), fmt.Errorf("first argument to ParseFS must be an identifier"))
+		return nil, "", wrapWithFilename(dir, fileSet, exp.Pos(), fmt.Errorf("first argument to ParseFS must be an identifier"))
 	}
 	for _, decl := range astgen.IterateGenDecl(files, token.VAR) {
 		for _, s := range decl.Specs {
@@ -446,19 +643,25 @@ func embedFSFilePaths(dir string, fileSet *token.FileSet, files []*ast.File, exp
 				continue
 			}
 			var comment strings.Builder
-			commentNode := readComments(&comment, decl.Doc, spec.Doc)
-			templateNames := parseTemplateNames(comment.String())
-			absMat, err := embeddedFilesMatchingTemplateNameList(dir, fileSet, commentNode, templateNames, embeddedFiles)
+			commentNode := ReadComments(&comment, decl.Doc, spec.Doc)
+			templateNames := ParseTemplateNames(comment.String())
+			absMat, err := EmbeddedFilesMatchingTemplateNameList(dir, fileSet, commentNode, templateNames, embeddedFiles)
 			if err != nil {
-				return nil, err
+				return nil, "", err
 			}
-			return absMat, nil
+			return absMat, "", nil
 		}
 	}
-	return nil, wrapWithFilename(dir, fileSet, exp.Pos(), fmt.Errorf("variable %s not found", varIdent))
+	// The identifier was not found as a package-level var. Try the
+	// cross-package resolver which traces function parameters back through
+	// call sites to find the originating //go:embed var declaration.
+	if resolver != nil {
+		return resolver(typesInfo, files, varIdent)
+	}
+	return nil, "", wrapWithFilename(dir, fileSet, exp.Pos(), fmt.Errorf("variable %s not found", varIdent))
 }
 
-func embeddedFilesMatchingTemplateNameList(dir string, set *token.FileSet, comment ast.Node, templateNames, embeddedFiles []string) ([]string, error) {
+func EmbeddedFilesMatchingTemplateNameList(dir string, set *token.FileSet, comment ast.Node, templateNames, embeddedFiles []string) ([]string, error) {
 	var matches []string
 	for _, fp := range embeddedFiles {
 		for _, pattern := range templateNames {
@@ -482,7 +685,7 @@ func embeddedFilesMatchingTemplateNameList(dir string, set *token.FileSet, comme
 
 const goEmbedCommentPrefix = "//go:embed"
 
-func readComments(s *strings.Builder, groups ...*ast.CommentGroup) ast.Node {
+func ReadComments(s *strings.Builder, groups ...*ast.CommentGroup) ast.Node {
 	var n ast.Node
 	for _, c := range groups {
 		if c == nil {
@@ -501,7 +704,7 @@ func readComments(s *strings.Builder, groups ...*ast.CommentGroup) ast.Node {
 	return n
 }
 
-func parseTemplateNames(input string) []string {
+func ParseTemplateNames(input string) []string {
 	// todo: refactor to use strconv.QuotedPrefix
 	var (
 		templateNames       []string

@@ -1,0 +1,42 @@
+# Warn on unguarded pointer in a nested field chain.
+
+check-templates -w
+stderr 'accessing .Value on pointer type \*example.com/app.Inner may panic if nil.* \(W003\)'
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- main.go --
+package main
+
+import (
+	"embed"
+	"fmt"
+	"html/template"
+	"io"
+)
+
+var (
+	//go:embed *.gohtml
+	source embed.FS
+
+	templates = template.Must(template.New("app").ParseFS(source, "*"))
+)
+
+type Inner struct {
+	Value string
+}
+
+type Page struct {
+	Inner *Inner
+}
+
+func render(p Page) {
+	_ = templates.ExecuteTemplate(io.Discard, "index.gohtml", p)
+}
+
+var _ = fmt.Sprint
+
+-- index.gohtml --
+<h1>{{.Inner.Value}}</h1>

@@ -1,0 +1,53 @@
+# W003 is suppressed for nonil-tagged fields but still fires for
+# untagged pointer fields on the same struct.
+
+check-templates -w
+stderr 'accessing .Name on pointer type \*example.com/app.User may panic if nil.* \(W003\)'
+! stderr 'config.Strings'
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- main.go --
+package main
+
+import (
+	"embed"
+	"fmt"
+	"html/template"
+	"net/http"
+)
+
+//go:embed *.gohtml
+var source embed.FS
+
+var templates = template.Must(template.ParseFS(source, "*"))
+
+type Strings struct {
+	AppName string
+}
+
+type User struct {
+	Name string
+}
+
+type PageData struct {
+	Title string
+	S     *Strings `templatecheck:"nonil"`
+	User  *User
+}
+
+func handleIndex(w http.ResponseWriter, r *http.Request) {
+	_ = templates.ExecuteTemplate(w, "index.gohtml", PageData{
+		Title: "Home",
+		S:     &Strings{AppName: "MyApp"},
+		User:  &User{Name: "Alice"},
+	})
+}
+
+var _ = fmt.Sprint
+
+-- index.gohtml --
+<h1>{{.S.AppName}}</h1>
+<p>{{.User.Name}}</p>

@@ -1,0 +1,43 @@
+# FuncMap with a package-level function variable resolves correctly.
+
+check-templates
+! stderr .
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- main.go --
+package main
+
+import (
+	"embed"
+	"fmt"
+	"html/template"
+	"io"
+	"strings"
+)
+
+var toUpper = strings.ToUpper
+
+var (
+	//go:embed *.gohtml
+	source embed.FS
+
+	templates = template.Must(template.New("app").Funcs(template.FuncMap{
+		"upper": toUpper,
+	}).ParseFS(source, "*"))
+)
+
+type Page struct {
+	Title string
+}
+
+func render() {
+	_ = templates.ExecuteTemplate(io.Discard, "index.gohtml", Page{Title: "hello"})
+}
+
+var _ = fmt.Sprint
+
+-- index.gohtml --
+<h1>{{.Title | upper}}</h1>

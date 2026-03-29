@@ -1,0 +1,53 @@
+# W003 should not fire when a pointer field is accessed inside an
+# {{if $.Field}} guard that establishes nil-safety through $.
+
+check-templates -w
+! stderr 'W003'
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- main.go --
+package main
+
+import (
+	"embed"
+	"fmt"
+	"html/template"
+	"net/http"
+)
+
+//go:embed *.gohtml
+var source embed.FS
+
+var templates = template.Must(template.ParseFS(source, "*"))
+
+type Model struct {
+	Name string
+}
+
+type Page struct {
+	Title string
+	Model *Model
+	Items []string
+}
+
+func handleForm(w http.ResponseWriter, r *http.Request) {
+	_ = templates.ExecuteTemplate(w, "form.gohtml", Page{
+		Title: "Form",
+		Model: &Model{Name: "Widget"},
+		Items: []string{"a", "b"},
+	})
+}
+
+var _ = fmt.Sprint
+
+-- form.gohtml --
+<h1>{{.Title}}</h1>
+{{range .Items}}
+<p>{{.}}</p>
+{{if $.Model}}
+<span>{{$.Model.Name}}</span>
+{{end}}
+{{end}}

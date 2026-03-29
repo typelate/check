@@ -1,0 +1,49 @@
+# W003 nil-dereference warnings are suppressed for struct fields tagged
+# with `templatecheck:"nonil"`. This covers both direct field access
+# (.S.AppName) and variable assignment ($s := .S; $s.AppName).
+
+check-templates -w
+! stderr 'W003'
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- main.go --
+package main
+
+import (
+	"embed"
+	"fmt"
+	"html/template"
+	"net/http"
+)
+
+//go:embed *.gohtml
+var source embed.FS
+
+var templates = template.Must(template.ParseFS(source, "*"))
+
+type Strings struct {
+	AppName string
+	Welcome string
+}
+
+type PageData struct {
+	Title string
+	S     *Strings `templatecheck:"nonil"`
+}
+
+func handleIndex(w http.ResponseWriter, r *http.Request) {
+	_ = templates.ExecuteTemplate(w, "index.gohtml", PageData{
+		Title: "Home",
+		S:     &Strings{AppName: "MyApp", Welcome: "Hello"},
+	})
+}
+
+var _ = fmt.Sprint
+
+-- index.gohtml --
+<h1>{{.S.AppName}}</h1>
+{{$s := .S}}
+<p>{{$s.Welcome}}</p>

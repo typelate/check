@@ -1,0 +1,43 @@
+# W003 SHOULD fire for pointer access in "or" arguments — unlike "and",
+# "or" returns the first truthy value, so later arguments can still be
+# evaluated when earlier ones are nil/falsy.
+
+check-templates -w
+stderr 'W003'
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- main.go --
+package main
+
+import (
+	"embed"
+	"fmt"
+	"html/template"
+	"io"
+)
+
+//go:embed *.gohtml
+var source embed.FS
+
+var templates = template.Must(template.ParseFS(source, "*"))
+
+type User struct {
+	Role string
+}
+
+type Page struct {
+	Title string
+	User  *User
+}
+
+func render(p Page) {
+	_ = templates.ExecuteTemplate(io.Discard, "index.gohtml", p)
+}
+
+var _ = fmt.Sprint
+
+-- index.gohtml --
+{{if or .User .User.Role}}yes{{end}}

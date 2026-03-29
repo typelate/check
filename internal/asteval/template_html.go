@@ -65,3 +65,12 @@ func (h *htmlTemplate) FindTree(name string) (*parse.Tree, bool) {
 	}
 	return t.Tree, true
 }
+
+func (h *htmlTemplate) TemplateNames() []string {
+	ts := h.t.Templates()
+	names := make([]string, 0, len(ts))
+	for _, t := range ts {
+		names = append(names, t.Name())
+	}
+	return names
+}

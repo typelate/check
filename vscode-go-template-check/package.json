@@ -1,0 +1,65 @@
+{
+  "name": "go-template-check",
+  "displayName": "Go Template Check",
+  "description": "Type-checks html/template and text/template calls; reports errors as squiggles inside .gohtml and .tmpl files.",
+  "publisher": "typelate",
+  "version": "0.2.0",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/typelate/check"
+  },
+  "engines": { "vscode": "^1.80.0" },
+  "categories": ["Linters", "Programming Languages"],
+  "keywords": ["go", "golang", "template", "html/template", "text/template", "type-check"],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onLanguage:go",
+    "workspaceContains:**/*.gohtml",
+    "workspaceContains:**/*.tmpl"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "gohtml",
+        "aliases": ["Go HTML Template", "gohtml"],
+        "extensions": [".gohtml"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "gohtml",
+        "scopeName": "text.html.gotemplate",
+        "path": "./syntaxes/gohtml.tmLanguage.json",
+        "embeddedLanguages": {
+          "text.html.basic": "html"
+        }
+      }
+    ],
+    "configuration": {
+      "title": "Go Template Check",
+      "properties": {
+        "templatecheck.binaryPath": {
+          "type": "string",
+          "default": "check-templates",
+          "description": "Path to the check-templates binary. Defaults to 'check-templates' (must be on PATH)."
+        },
+        "templatecheck.enableWarnings": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show W001–W007 warnings (unused variables, dead branches, etc.) alongside errors."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "esbuild src/extension.ts --bundle --platform=node --external:vscode --outfile=out/extension.js --minify"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.80.0",
+    "@types/node": "^20.0.0",
+    "@vscode/vsce": "^2.0.0",
+    "esbuild": "^0.20.0"
+  }
+}

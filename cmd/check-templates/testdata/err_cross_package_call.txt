@@ -1,0 +1,51 @@
+# Template check catches field errors through cross-package wrapper function calls.
+
+! check-templates ./...
+stderr 'index\.gohtml:1:6: executing "index\.gohtml" at <\.Missing>: Missing not found on example\.com/app/handlers\.Page \(E001\)'
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- render/render.go --
+package render
+
+import (
+	"html/template"
+	"io"
+)
+
+func Template(tpl *template.Template, w io.Writer, name string, data any) error {
+	return tpl.ExecuteTemplate(w, name, data)
+}
+-- handlers/handler.go --
+package handlers
+
+import (
+	"embed"
+	"fmt"
+	"html/template"
+	"net/http"
+
+	"example.com/app/render"
+)
+
+var (
+	//go:embed *.gohtml
+	source embed.FS
+
+	templates = template.Must(template.ParseFS(source, "*"))
+)
+
+type Page struct {
+	Title string
+}
+
+func HandleIndex(w http.ResponseWriter, r *http.Request) {
+	_ = render.Template(templates, w, "index.gohtml", Page{Title: "Home"})
+}
+
+var _ = fmt.Sprint
+
+-- handlers/index.gohtml --
+<h1>{{.Missing}}</h1>

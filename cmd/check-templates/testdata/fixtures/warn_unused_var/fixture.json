@@ -1,0 +1,7 @@
+{
+  "flags": ["-w"],
+  "wantExitCode": 0,
+  "wantStderr": [
+    "page.gotmpl:1:2: variable $title declared but not used (W005)"
+  ]
+}

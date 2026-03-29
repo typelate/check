@@ -1,7 +1,7 @@
 # Inline anonymous struct types should report errors for missing fields.
 
 ! check-templates
-stderr 'type check failed:.*index\.gohtml:1:2: executing "index\.gohtml" at <\.Missing>: Missing not found on struct\{Title string\}'
+stderr 'index\.gohtml:1:2: executing "index\.gohtml" at <\.Missing>: Missing not found on struct\{Title string\} \(E001\)'
 
 -- go.mod --
 module example.com/app

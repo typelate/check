@@ -1,0 +1,89 @@
+# Running with ./... finds and checks templates in deeply nested packages.
+
+check-templates ./...
+! stderr .
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- main.go --
+package main
+
+import "fmt"
+
+func main() {
+	fmt.Println("root")
+}
+-- sub/handler.go --
+package sub
+
+import (
+	"embed"
+	"fmt"
+	"html/template"
+	"net/http"
+)
+
+var (
+	//go:embed *.html
+	source embed.FS
+
+	templates = template.Must(template.ParseFS(source, "*"))
+)
+
+type Page struct {
+	Title   string
+	Content string
+}
+
+func Handle(w http.ResponseWriter, r *http.Request) {
+	_ = templates.ExecuteTemplate(w, "page.html", Page{Title: "Hello", Content: "World"})
+}
+
+var _ = fmt.Sprint
+
+-- sub/page.html --
+<html>
+<head><title>{{.Title}}</title></head>
+<body>{{.Content}}</body>
+</html>
+-- sub/deep/nested/handler.go --
+package nested
+
+import (
+	"embed"
+	"fmt"
+	"html/template"
+	"net/http"
+)
+
+var (
+	//go:embed *.html
+	viewFS embed.FS
+
+	views = template.Must(template.ParseFS(viewFS, "*"))
+)
+
+type Article struct {
+	Headline string
+	Body     string
+	Author   string
+}
+
+func ServeArticle(w http.ResponseWriter, r *http.Request) {
+	_ = views.ExecuteTemplate(w, "article.html", Article{
+		Headline: "Test",
+		Body:     "Content",
+		Author:   "Author",
+	})
+}
+
+var _ = fmt.Sprint
+
+-- sub/deep/nested/article.html --
+<article>
+<h1>{{.Headline}}</h1>
+<p>{{.Body}}</p>
+<span>{{.Author}}</span>
+</article>

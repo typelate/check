@@ -1,0 +1,46 @@
+# ParseFS called with a spread []string variable for patterns instead of
+# string literals (e.g. ParseFS(source, patterns...)). The tool should
+# resolve the patterns via SliceEvalContext.
+
+check-templates
+! stderr .
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- main.go --
+package main
+
+import (
+	"embed"
+	"fmt"
+	"html/template"
+	"net/http"
+)
+
+//go:embed templates/*.gohtml
+var source embed.FS
+
+type Page struct {
+	Title string
+}
+
+var patterns = []string{"templates/index.gohtml", "templates/about.gohtml"}
+
+var ts = template.Must(template.New("").ParseFS(source, patterns...))
+
+func handleIndex(w http.ResponseWriter, r *http.Request) {
+	_ = ts.ExecuteTemplate(w, "index.gohtml", Page{Title: "Home"})
+}
+
+func handleAbout(w http.ResponseWriter, r *http.Request) {
+	_ = ts.ExecuteTemplate(w, "about.gohtml", Page{Title: "About"})
+}
+
+var _ = fmt.Sprint
+
+-- templates/index.gohtml --
+<h1>{{.Title}}</h1>
+-- templates/about.gohtml --
+<p>{{.Title}}</p>

@@ -1,0 +1,47 @@
+# Valid printf format strings pass without errors.
+
+check-templates ./...
+! stderr .
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- main.go --
+package main
+
+import (
+	"embed"
+	"fmt"
+	"html/template"
+	"net/http"
+)
+
+var (
+	//go:embed *.gohtml
+	source embed.FS
+
+	templates = template.Must(template.ParseFS(source, "*"))
+)
+
+type Page struct {
+	Name  string
+	Count int
+	Score float64
+	OK    bool
+}
+
+func handleIndex(w http.ResponseWriter, r *http.Request) {
+	_ = templates.ExecuteTemplate(w, "index.gohtml", Page{Name: "Alice", Count: 42, Score: 3.14, OK: true})
+}
+
+var _ = fmt.Sprint
+
+-- index.gohtml --
+{{printf "%s" .Name}}
+{{printf "%d" .Count}}
+{{printf "%f" .Score}}
+{{printf "%v" .Name}}
+{{printf "%t" .OK}}
+{{printf "hello %%"}}
+{{printf "%s has %d items" .Name .Count}}

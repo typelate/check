@@ -1,0 +1,52 @@
+# Template check passes when a closure is passed as a function argument to
+# another package and the concrete type at the indirect call site matches.
+
+check-templates ./...
+! stderr .
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- main.go --
+package main
+
+import (
+	"html/template"
+	"net/http"
+
+	"example.com/app/handlers"
+)
+
+func main() {
+	t := template.Must(template.ParseFiles("templates/base.html"))
+
+	render := func(w http.ResponseWriter, data any) {
+		_ = t.ExecuteTemplate(w, "base.html", data)
+	}
+
+	http.HandleFunc("/", handlers.HandleIndex(render))
+}
+-- handlers/handler.go --
+package handlers
+
+import (
+	"fmt"
+	"net/http"
+)
+
+type Page struct {
+	Title   string
+	Content string
+}
+
+func HandleIndex(render func(http.ResponseWriter, any)) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		render(w, Page{Title: "Home", Content: "Welcome"})
+	}
+}
+
+var _ = fmt.Sprint
+-- templates/base.html --
+<h1>{{.Title}}</h1>
+<p>{{.Content}}</p>

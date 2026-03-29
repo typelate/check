@@ -1,0 +1,36 @@
+# template.ParseFiles with string literal paths passes type checking.
+
+check-templates
+! stderr .
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- main.go --
+package main
+
+import (
+	"fmt"
+	"html/template"
+	"net/http"
+)
+
+var templates = template.Must(template.ParseFiles("templates/index.html", "templates/header.html"))
+
+type Page struct {
+	Title   string
+	Content string
+}
+
+func handleIndex(w http.ResponseWriter, r *http.Request) {
+	_ = templates.ExecuteTemplate(w, "index.html", Page{Title: "Home", Content: "Welcome"})
+}
+
+var _ = fmt.Sprint
+
+-- templates/index.html --
+{{template "header.html" .}}
+<p>{{.Content}}</p>
+-- templates/header.html --
+<h1>{{.Title}}</h1>

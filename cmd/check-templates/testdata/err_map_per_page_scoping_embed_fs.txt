@@ -1,0 +1,95 @@
+# Per-page template scoping with embed.FS: type errors in page-specific
+# templates should be caught when the page's data type doesn't have the
+# referenced field.
+
+! check-templates ./...
+stderr 'BadField'
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- assets.go --
+package app
+
+import "embed"
+
+//go:embed templates/layouts/*.html templates/pages/*/*.html
+var TemplatesFS embed.FS
+-- web/web.go --
+package web
+
+import (
+	"fmt"
+	"html/template"
+	"io/fs"
+	"net/http"
+	"path"
+)
+
+type Page struct {
+	Title string
+}
+
+func New(fsys fs.FS) http.Handler {
+	templates := loadTemplates(fsys)
+
+	render := func(w http.ResponseWriter, name string, data any) {
+		t, ok := templates[name]
+		if !ok {
+			http.Error(w, "not found", 500)
+			return
+		}
+		_ = t.ExecuteTemplate(w, "base.html", data)
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		render(w, "home/index.html", Page{Title: "Home"})
+	})
+	return mux
+}
+
+func loadTemplates(fsys fs.FS) map[string]*template.Template {
+	layoutFile := "templates/layouts/base.html"
+	pageFiles, _ := fs.Glob(fsys, "templates/pages/*/*.html")
+	templates := make(map[string]*template.Template)
+	for _, page := range pageFiles {
+		dir := path.Dir(page)
+		name := path.Base(dir) + "/" + path.Base(page)
+		files := []string{layoutFile, page}
+		t, err := template.New("").ParseFS(fsys, files...)
+		if err != nil {
+			panic(err)
+		}
+		templates[name] = t
+	}
+	return templates
+}
+
+var _ = fmt.Sprint
+-- cmd/server/main.go --
+package main
+
+import (
+	"fmt"
+	"net/http"
+
+	app "example.com/app"
+	"example.com/app/web"
+)
+
+func main() {
+	handler := web.New(app.TemplatesFS)
+	_ = http.ListenAndServe(":8080", handler)
+}
+
+var _ = fmt.Sprint
+-- templates/layouts/base.html --
+<h1>{{.Title}}</h1>
+{{template "content" .}}
+
+-- templates/pages/home/index.html --
+{{define "content"}}
+<p>{{.BadField}}</p>
+{{end}}

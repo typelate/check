@@ -1,0 +1,40 @@
+# No warning when pointer access is guarded by {{if}}.
+
+check-templates -w
+! stderr .
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- main.go --
+package main
+
+import (
+	"embed"
+	"fmt"
+	"html/template"
+	"io"
+)
+
+var (
+	//go:embed *.gohtml
+	source embed.FS
+
+	templates = template.Must(template.New("app").ParseFS(source, "*"))
+)
+
+type Page struct {
+	Title string
+}
+
+func render(p *Page) {
+	_ = templates.ExecuteTemplate(io.Discard, "index.gohtml", p)
+}
+
+var _ = fmt.Sprint
+
+-- index.gohtml --
+{{if .}}
+<h1>{{.Title}}</h1>
+{{end}}

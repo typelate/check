@@ -1,0 +1,43 @@
+# FuncMap with a method value resolves the function signature correctly.
+
+check-templates
+! stderr .
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- main.go --
+package main
+
+import (
+	"embed"
+	"fmt"
+	"html/template"
+	"io"
+	"strings"
+)
+
+var (
+	//go:embed *.gohtml
+	source embed.FS
+
+	r = strings.NewReplacer("-", " ")
+
+	templates = template.Must(template.New("app").Funcs(template.FuncMap{
+		"replace": r.Replace,
+	}).ParseFS(source, "*"))
+)
+
+type Page struct {
+	Title string
+}
+
+func render() {
+	_ = templates.ExecuteTemplate(io.Discard, "index.gohtml", Page{Title: "hello-world"})
+}
+
+var _ = fmt.Sprint
+
+-- index.gohtml --
+<h1>{{.Title | replace}}</h1>

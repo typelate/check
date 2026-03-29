@@ -1,0 +1,33 @@
+# template.ParseGlob catches missing field errors.
+
+! check-templates
+stderr 'index\.html.*Missing not found on example\.com/app\.Page \(E001\)'
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- main.go --
+package main
+
+import (
+	"fmt"
+	"html/template"
+	"net/http"
+)
+
+var templates = template.Must(template.ParseGlob("templates/*.html"))
+
+type Page struct {
+	Title string
+}
+
+func handleIndex(w http.ResponseWriter, r *http.Request) {
+	_ = templates.ExecuteTemplate(w, "index.html", Page{Title: "Home"})
+}
+
+var _ = fmt.Sprint
+
+-- templates/index.html --
+<h1>{{.Title}}</h1>
+<p>{{.Missing}}</p>

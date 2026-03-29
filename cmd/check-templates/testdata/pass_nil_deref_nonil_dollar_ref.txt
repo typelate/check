@@ -1,0 +1,59 @@
+# W003 should not fire for $.User.Role when User has templatecheck:"nonil"
+# tag, even inside a {{with}} or {{range}} block that changes dot.
+
+check-templates -w
+! stderr 'W003'
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- main.go --
+package main
+
+import (
+	"embed"
+	"fmt"
+	"html/template"
+	"net/http"
+)
+
+//go:embed *.gohtml
+var source embed.FS
+
+var templates = template.Must(template.ParseFS(source, "*"))
+
+type User struct {
+	Role     string
+	Username string
+}
+
+type Owner struct {
+	ID   int
+	Name string
+}
+
+type Page struct {
+	Title string
+	User  *User  `templatecheck:"nonil"`
+	Owner *Owner
+}
+
+func handleOwner(w http.ResponseWriter, r *http.Request) {
+	_ = templates.ExecuteTemplate(w, "detail.gohtml", Page{
+		Title: "Owner",
+		User:  &User{Role: "admin", Username: "alice"},
+		Owner: &Owner{ID: 1, Name: "Alice"},
+	})
+}
+
+var _ = fmt.Sprint
+
+-- detail.gohtml --
+<h1>{{.Title}}</h1>
+{{with .Owner}}
+<p>{{.Name}}</p>
+{{if eq $.User.Role "admin"}}
+<a href="/owners/{{.ID}}/edit">Edit</a>
+{{end}}
+{{end}}

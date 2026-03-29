@@ -1,8 +1,8 @@
 # Multiple ExecuteTemplate calls can each report errors.
 
 ! check-templates
-stderr 'type check failed:.*index\.gohtml:1:6: executing "index\.gohtml" at <\.Missing>: Missing not found on example\.com/app\.IndexPage'
-stderr 'type check failed:.*about\.gohtml:1:5: executing "about\.gohtml" at <\.Unknown>: Unknown not found on example\.com/app\.AboutPage'
+stderr 'index\.gohtml:1:6: executing "index\.gohtml" at <\.Missing>: Missing not found on example\.com/app\.IndexPage \(E001\)'
+stderr 'about\.gohtml:1:5: executing "about\.gohtml" at <\.Unknown>: Unknown not found on example\.com/app\.AboutPage \(E001\)'
 
 -- go.mod --
 module example.com/app

@@ -65,7 +65,196 @@ func (functions Functions) CheckCall(global *Global, funcIdent string, argNodes 
 	} else if resultLen > 2 {
 		return nil, fmt.Errorf("function %s has too many results", funcIdent)
 	}
+	if funcIdent == "printf" {
+		if err := checkPrintf(global, argNodes, argTypes); err != nil {
+			return nil, err
+		}
+	}
 	return checkCallArguments(global, fn, argTypes)
+}
+
+// checkPrintf validates that a printf format string's verbs match the
+// argument types. It only checks when the format string is a static
+// string node.
+func checkPrintf(global *Global, argNodes []parse.Node, argTypes []types.Type) error {
+	if len(argTypes) == 0 {
+		return fmt.Errorf("printf requires a format string")
+	}
+	if len(argNodes) == 0 {
+		// Format string was piped in — can't validate statically.
+		return nil
+	}
+	fmtNode, ok := argNodes[0].(*parse.StringNode)
+	if !ok {
+		// Format string is not a static string — can't validate.
+		return nil
+	}
+	format := fmtNode.Text
+	verbs := parsePrintfVerbs(format)
+	nArgs := len(argTypes) - 1 // first arg is the format string itself
+	if len(verbs) != nArgs {
+		return fmt.Errorf("printf format %q has %d verb(s) but %d argument(s)", format, len(verbs), nArgs)
+	}
+	for i, verb := range verbs {
+		argType := argTypes[i+1]
+		if err := checkPrintfVerb(global, verb, argType, i+1); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// printfVerb represents a single format verb extracted from a printf string.
+type printfVerb struct {
+	verb byte // the verb character (d, s, f, v, etc.)
+}
+
+// parsePrintfVerbs extracts format verbs from a printf format string.
+func parsePrintfVerbs(format string) []printfVerb {
+	var verbs []printfVerb
+	for i := 0; i < len(format); i++ {
+		if format[i] != '%' {
+			continue
+		}
+		i++
+		if i >= len(format) {
+			break
+		}
+		// Skip '%%' (literal percent).
+		if format[i] == '%' {
+			continue
+		}
+		// Skip flags: #, 0, -, ' ', +
+		for i < len(format) && (format[i] == '#' || format[i] == '0' || format[i] == '-' || format[i] == ' ' || format[i] == '+') {
+			i++
+		}
+		// Skip width: digits or *
+		for i < len(format) && ((format[i] >= '0' && format[i] <= '9') || format[i] == '*') {
+			i++
+		}
+		// Skip precision: .digits or .*
+		if i < len(format) && format[i] == '.' {
+			i++
+			for i < len(format) && ((format[i] >= '0' && format[i] <= '9') || format[i] == '*') {
+				i++
+			}
+		}
+		// The verb character.
+		if i < len(format) {
+			verbs = append(verbs, printfVerb{verb: format[i]})
+		}
+	}
+	return verbs
+}
+
+// checkPrintfVerb validates that a single format verb is compatible with
+// the argument type.
+func checkPrintfVerb(global *Global, v printfVerb, argType types.Type, argIdx int) error {
+	underlying := argType.Underlying()
+
+	switch v.verb {
+	case 'v', 'T':
+		// %v and %T accept any type.
+		return nil
+	case 'd', 'b', 'o', 'O', 'x', 'X', 'c', 'U':
+		// Integer verbs.
+		if isIntegerType(underlying) {
+			return nil
+		}
+		return fmt.Errorf("printf verb %%%c requires an integer, got %s for argument %d", v.verb, global.TypeString(argType), argIdx)
+	case 'e', 'E', 'f', 'F', 'g', 'G':
+		// Float verbs.
+		if isFloatType(underlying) || isIntegerType(underlying) {
+			return nil
+		}
+		return fmt.Errorf("printf verb %%%c requires a float, got %s for argument %d", v.verb, global.TypeString(argType), argIdx)
+	case 's', 'q':
+		// String verbs — accept string, []byte, error, Stringer, or any basic type.
+		if isStringType(underlying) || isByteSlice(underlying) || implementsError(argType) || implementsStringer(argType) {
+			return nil
+		}
+		return fmt.Errorf("printf verb %%%c requires a string, got %s for argument %d", v.verb, global.TypeString(argType), argIdx)
+	case 'p':
+		// Pointer verb.
+		if _, ok := underlying.(*types.Pointer); ok {
+			return nil
+		}
+		if _, ok := underlying.(*types.Slice); ok {
+			return nil
+		}
+		if _, ok := underlying.(*types.Map); ok {
+			return nil
+		}
+		if _, ok := underlying.(*types.Chan); ok {
+			return nil
+		}
+		return fmt.Errorf("printf verb %%%c requires a pointer, got %s for argument %d", v.verb, global.TypeString(argType), argIdx)
+	case 't':
+		// Boolean verb.
+		if b, ok := underlying.(*types.Basic); ok && b.Info()&types.IsBoolean != 0 {
+			return nil
+		}
+		return fmt.Errorf("printf verb %%%c requires a bool, got %s for argument %d", v.verb, global.TypeString(argType), argIdx)
+	case 'w':
+		// %w for fmt.Errorf — requires error.
+		if implementsError(argType) {
+			return nil
+		}
+		return fmt.Errorf("printf verb %%%c requires an error, got %s for argument %d", v.verb, global.TypeString(argType), argIdx)
+	default:
+		// Unknown verb — don't error, could be a custom format.
+		return nil
+	}
+}
+
+func isIntegerType(t types.Type) bool {
+	b, ok := t.(*types.Basic)
+	return ok && b.Info()&types.IsInteger != 0
+}
+
+func isFloatType(t types.Type) bool {
+	b, ok := t.(*types.Basic)
+	return ok && (b.Info()&types.IsFloat != 0 || b.Info()&types.IsComplex != 0)
+}
+
+func isStringType(t types.Type) bool {
+	b, ok := t.(*types.Basic)
+	return ok && b.Info()&types.IsString != 0
+}
+
+func isByteSlice(t types.Type) bool {
+	s, ok := t.(*types.Slice)
+	if !ok {
+		return false
+	}
+	b, ok := s.Elem().(*types.Basic)
+	return ok && b.Kind() == types.Byte
+}
+
+func implementsError(t types.Type) bool {
+	errorType := types.Universe.Lookup("error").Type().Underlying().(*types.Interface)
+	return types.Implements(t, errorType) || types.Implements(types.NewPointer(t), errorType)
+}
+
+func implementsStringer(t types.Type) bool {
+	// Check for fmt.Stringer (String() string method).
+	mset := types.NewMethodSet(t)
+	for i := 0; i < mset.Len(); i++ {
+		m := mset.At(i)
+		if m.Obj().Name() != "String" {
+			continue
+		}
+		sig, ok := m.Obj().Type().(*types.Signature)
+		if !ok {
+			continue
+		}
+		if sig.Params().Len() == 0 && sig.Results().Len() == 1 {
+			if b, ok := sig.Results().At(0).Type().(*types.Basic); ok && b.Kind() == types.String {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func checkCallArguments(global *Global, fn *types.Signature, args []types.Type) (types.Type, error) {
