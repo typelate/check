@@ -2,6 +2,7 @@ package check
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"go/token"
 	"go/types"
@@ -19,11 +20,10 @@ type Error struct {
 }
 
 func newError(tree *parse.Tree, node parse.Node, message string, args ...any) *Error {
-	loc, context := tree.ErrorContext(node)
 	return &Error{
 		Tree: tree,
 		Node: node,
-		err:  fmt.Errorf("type check failed: %s: executing %q at <%s>: %w", loc, tree.Name, context, fmt.Errorf(message, args...)),
+		err:  fmt.Errorf(message, args...),
 	}
 }
 
@@ -36,11 +36,32 @@ func wrapError(tree *parse.Tree, node parse.Node, err error) *Error {
 }
 
 func (e *Error) Error() string {
-	return e.err.Error()
+	loc, ctx := e.Tree.ErrorContext(e.Node)
+	return fmt.Sprintf("type check failed: %s: executing %q at <%s>: %s", loc, e.Tree.Name, ctx, e.err.Error())
 }
 
 func (e *Error) Unwrap() error {
 	return e.err
+}
+
+// VerboseError returns a (possibly) multi-line message. The single-line
+// summary returned by Error stays on the first line; if the wrapped error
+// implements VerboseErrorer and contributes additional detail, that detail
+// is indented on subsequent lines.
+func (e *Error) VerboseError() string {
+	loc, ctx := e.Tree.ErrorContext(e.Node)
+	prefix := fmt.Sprintf("type check failed: %s: executing %q at <%s>: ", loc, e.Tree.Name, ctx)
+	var v VerboseErrorer
+	if !errors.As(e.err, &v) {
+		return prefix + e.err.Error()
+	}
+	verbose := v.VerboseError()
+	first, rest, hasRest := strings.Cut(verbose, "\n")
+	if !hasRest {
+		return prefix + first
+	}
+	indented := strings.ReplaceAll(rest, "\n", "\n  ")
+	return prefix + first + "\n  " + indented
 }
 
 type Global struct {
@@ -79,25 +100,30 @@ func (g *Global) TypeString(typ types.Type) string {
 	return buf.String()
 }
 
-func (g *Global) formatNotFound(ident string, tp types.Type) string {
-	var buf strings.Builder
-	buf.WriteString(ident)
-	buf.WriteString(" not found on ")
-	buf.WriteString(g.TypeString(tp))
+// formatNotFoundParts returns both forms of the not-found message: bare
+// (without the trailing "; available: ..." or "; no exported fields..." clause)
+// and full (with that clause). Verbose error rendering uses the bare form
+// because it follows up with a source declaration of the receiver type.
+func (g *Global) formatNotFoundParts(ident string, tp types.Type) (bare, full string) {
+	var b strings.Builder
+	b.WriteString(ident)
+	b.WriteString(" not found on ")
+	b.WriteString(g.TypeString(tp))
 	if named, ok := tp.(*types.Named); ok {
 		pos := g.fileSet.Position(named.Obj().Pos())
 		if pos.IsValid() {
-			fmt.Fprintf(&buf, " (declared at %s)", pos)
+			fmt.Fprintf(&b, " (declared at %s)", pos)
 		}
 	}
+	bare = b.String()
+
 	members := g.collectMembers(tp)
 	if len(members) == 0 {
-		buf.WriteString("; no exported fields or methods")
+		full = bare + "; no exported fields or methods"
 	} else {
-		buf.WriteString("; available: ")
-		buf.WriteString(strings.Join(members, ", "))
+		full = bare + "; available: " + strings.Join(members, ", ")
 	}
-	return buf.String()
+	return bare, full
 }
 
 func (g *Global) collectMembers(tp types.Type) []string {
@@ -500,6 +526,19 @@ func (s *scope) notAFunction(tree *parse.Tree, node parse.Node, args []parse.Nod
 	return nil
 }
 
+// identErr builds an *Error wrapping an *IdentifierError. The location
+// prefix is added by *Error at format time; the IdentifierError carries
+// the full type so callers of FormatVerbose can render its structure.
+func (s *scope) identErr(tree *parse.Tree, n parse.Node, ident string, tp types.Type, format string, a ...any) *Error {
+	return wrapError(tree, n, &IdentifierError{
+		Identifier: ident,
+		Type:       tp,
+		Cause:      fmt.Errorf(format, a...),
+		qualifier:  s.global.Qualifier,
+		fset:       s.global.fileSet,
+	})
+}
+
 func (s *scope) checkIdentifiers(tree *parse.Tree, dot types.Type, n parse.Node, idents []string, args []types.Type) (types.Type, error) {
 	x := dot
 	for i, ident := range idents {
@@ -515,7 +554,7 @@ func (s *scope) checkIdentifiers(tree *parse.Tree, dot types.Type, n parse.Node,
 					x = xx.Elem()
 					_, err := strconv.Atoi(ident)
 					if err != nil {
-						return nil, newError(tree, n, `can't evaluate field one in type %s`, s.global.TypeString(xx))
+						return nil, s.identErr(tree, n, ident, xx, `can't evaluate field one in type %s`, s.global.TypeString(xx))
 					}
 				case types.String:
 					x = xx.Elem()
@@ -528,11 +567,19 @@ func (s *scope) checkIdentifiers(tree *parse.Tree, dot types.Type, n parse.Node,
 			continue
 		default:
 			if !token.IsExported(ident) {
-				return nil, newError(tree, n, "field or method %s is not exported", ident)
+				return nil, s.identErr(tree, n, ident, x, "field or method %s is not exported", ident)
 			}
 			obj, _, _ := types.LookupFieldOrMethod(x, true, s.global.pkg, ident)
 			if obj == nil {
-				return nil, newError(tree, n, "%s", s.global.formatNotFound(ident, x))
+				bare, full := s.global.formatNotFoundParts(ident, x)
+				return nil, wrapError(tree, n, &IdentifierError{
+					Identifier: ident,
+					Type:       x,
+					Cause:      errors.New(full),
+					bareCause:  bare,
+					qualifier:  s.global.Qualifier,
+					fset:       s.global.fileSet,
+				})
 			}
 			switch o := obj.(type) {
 			default:
@@ -542,18 +589,18 @@ func (s *scope) checkIdentifiers(tree *parse.Tree, dot types.Type, n parse.Node,
 				resultLen := sig.Results().Len()
 				if resultLen < 1 || resultLen > 2 {
 					methodPos := s.global.fileSet.Position(o.Pos())
-					return nil, newError(tree, n, "function %s has %d return values; should be 1 or 2: incorrect signature at %s", ident, resultLen, methodPos)
+					return nil, s.identErr(tree, n, ident, sig, "function %s has %d return values; should be 1 or 2: incorrect signature at %s", ident, resultLen, methodPos)
 				}
 				if resultLen > 1 {
 					methodPos := s.global.fileSet.Position(obj.Pos())
 					finalResult := sig.Results().At(sig.Results().Len() - 1)
 					errorType := types.Universe.Lookup("error")
 					if !types.Identical(errorType.Type(), finalResult.Type()) {
-						return nil, newError(tree, n, "invalid function signature for %s: second return value should be error; is %s: incorrect signature at %s", ident, s.global.TypeString(finalResult.Type()), methodPos)
+						return nil, s.identErr(tree, n, ident, sig, "invalid function signature for %s: second return value should be error; is %s: incorrect signature at %s", ident, s.global.TypeString(finalResult.Type()), methodPos)
 					}
 				}
 				if i == len(idents)-1 {
-					res, err := checkCallArguments(s.global, sig, args)
+					res, err := checkCallArguments(s.global, ident, sig, args)
 					if err != nil {
 						return nil, wrapError(tree, n, err)
 					}
@@ -562,16 +609,20 @@ func (s *scope) checkIdentifiers(tree *parse.Tree, dot types.Type, n parse.Node,
 				x = sig.Results().At(0).Type()
 			}
 			if _, ok := x.(*types.Signature); ok && i < len(idents)-1 {
-				return nil, newError(tree, n, "identifier chain not supported for type %s", s.global.TypeString(x))
+				return nil, s.identErr(tree, n, ident, x, "identifier chain not supported for type %s", s.global.TypeString(x))
 			}
 		}
 	}
 	if len(args) > 0 {
 		sig, ok := x.(*types.Signature)
 		if !ok {
-			return nil, newError(tree, n, "expected method or function")
+			return nil, s.identErr(tree, n, "", x, "expected method or function")
 		}
-		tp, err := checkCallArguments(s.global, sig, args)
+		var name string
+		if len(idents) > 0 {
+			name = idents[len(idents)-1]
+		}
+		tp, err := checkCallArguments(s.global, name, sig, args)
 		if err != nil {
 			return nil, wrapError(tree, n, err)
 		}

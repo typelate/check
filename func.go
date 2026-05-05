@@ -65,61 +65,64 @@ func (functions Functions) CheckCall(global *Global, funcIdent string, argNodes 
 	} else if resultLen > 2 {
 		return nil, fmt.Errorf("function %s has too many results", funcIdent)
 	}
-	return checkCallArguments(global, fn, argTypes)
+	return checkCallArguments(global, funcIdent, fn, argTypes)
 }
 
-func checkCallArguments(global *Global, fn *types.Signature, args []types.Type) (types.Type, error) {
-	if exp, got := fn.Params().Len(), len(args); !fn.Variadic() && exp != got {
-		return nil, fmt.Errorf("wrong number of args expected %d but got %d", exp, got)
+func checkCallArguments(global *Global, name string, fn *types.Signature, args []types.Type) (types.Type, error) {
+	callErr := func(format string, a ...any) *CallError {
+		return &CallError{
+			Name:      name,
+			Signature: fn,
+			ArgTypes:  args,
+			Cause:     fmt.Errorf(format, a...),
+			qualifier: global.Qualifier,
+		}
 	}
-	expNumFixed := fn.Params().Len()
+
+	expNum := fn.Params().Len()
 	isVar := fn.Variadic()
+	expFixed := expNum
 	if isVar {
-		expNumFixed--
+		expFixed--
 	}
-	got := len(args)
-	for i := 0; i < expNumFixed; i++ {
-		if i >= len(args) {
-			return nil, fmt.Errorf("wrong number of args expected %d but got %d", expNumFixed, got)
-		}
-		pt := fn.Params().At(i).Type()
-		at := args[i]
-		assignable := types.AssignableTo(at, pt)
-		if !assignable {
-			if ptr, ok := at.Underlying().(*types.Pointer); ok {
-				if types.AssignableTo(ptr.Elem(), pt) {
-					return pt, nil
-				}
-			}
-			if ptr, ok := pt.Underlying().(*types.Pointer); ok {
-				if types.AssignableTo(at, ptr.Elem()) {
-					return pt, nil
-				}
-			}
-			return nil, fmt.Errorf("argument %d has type %s expected %s", i, global.TypeString(at), global.TypeString(pt))
+
+	switch {
+	case !isVar && expNum != len(args):
+		return nil, callErr("wrong number of args expected %d but got %d", expNum, len(args))
+	case isVar && len(args) < expFixed:
+		return nil, callErr("wrong number of args expected at least %d but got %d", expFixed, len(args))
+	}
+
+	for i := 0; i < expFixed; i++ {
+		if err := checkArgAssignable(global, callErr, i, fn.Params().At(i).Type(), args[i]); err != nil {
+			return nil, err
 		}
 	}
 	if isVar {
-		pt := fn.Params().At(fn.Params().Len() - 1).Type().(*types.Slice).Elem()
-		for i := expNumFixed; i < len(args); i++ {
-			at := args[i]
-			assignable := types.AssignableTo(at, pt)
-			if !assignable {
-				if ptr, ok := at.Underlying().(*types.Pointer); ok {
-					if types.AssignableTo(ptr.Elem(), pt) {
-						return pt, nil
-					}
-				}
-				if ptr, ok := pt.Underlying().(*types.Pointer); ok {
-					if types.AssignableTo(at, ptr.Elem()) {
-						return pt, nil
-					}
-				}
-				return nil, fmt.Errorf("argument %d has type %s expected %s", i, global.TypeString(at), global.TypeString(pt))
+		elem := fn.Params().At(expNum - 1).Type().(*types.Slice).Elem()
+		for i := expFixed; i < len(args); i++ {
+			if err := checkArgAssignable(global, callErr, i, elem, args[i]); err != nil {
+				return nil, err
 			}
 		}
 	}
 	return fn.Results().At(0).Type(), nil
+}
+
+// checkArgAssignable returns nil when at is assignable to pt, allowing one
+// level of pointer auto-deref or auto-address (matching template runtime
+// semantics). Returns a *CallError built via callErr on mismatch.
+func checkArgAssignable(global *Global, callErr func(format string, a ...any) *CallError, i int, pt, at types.Type) error {
+	if types.AssignableTo(at, pt) {
+		return nil
+	}
+	if ptr, ok := at.Underlying().(*types.Pointer); ok && types.AssignableTo(ptr.Elem(), pt) {
+		return nil
+	}
+	if ptr, ok := pt.Underlying().(*types.Pointer); ok && types.AssignableTo(at, ptr.Elem()) {
+		return nil
+	}
+	return callErr("argument %d has type %s expected %s", i, global.TypeString(at), global.TypeString(pt))
 }
 
 func findPackage(pkg *types.Package, path string) (*types.Package, bool) {
@@ -142,6 +145,9 @@ func builtInCheck(global *Global, funcIdent string, nodes []parse.Node, argTypes
 	case "attrescaper":
 		return types.Universe.Lookup("string").Type(), nil
 	case "len":
+		if len(argTypes) < 1 {
+			return nil, fmt.Errorf("built-in len expects 1 argument got %d", len(argTypes))
+		}
 		switch x := argTypes[0].Underlying().(type) {
 		default:
 			return nil, fmt.Errorf("built-in len expects the first argument to be an array, slice, map, or string got %s", global.TypeString(x))
@@ -156,7 +162,7 @@ func builtInCheck(global *Global, funcIdent string, nodes []parse.Node, argTypes
 		return types.Universe.Lookup("int").Type(), nil
 	case "slice":
 		if l := len(argTypes); l < 1 || l > 4 {
-			return nil, fmt.Errorf("built-in slice expects at least 1 and no more than 3 arguments got %d", len(argTypes))
+			return nil, fmt.Errorf("built-in slice expects between 1 and 4 arguments got %d", len(argTypes))
 		}
 		for i := 1; i < len(nodes); i++ {
 			if n, ok := nodes[i].(*parse.NumberNode); ok && n.Int64 < 0 {
@@ -181,7 +187,7 @@ func builtInCheck(global *Global, funcIdent string, nodes []parse.Node, argTypes
 		}
 	case "and", "or":
 		if len(argTypes) < 1 {
-			return nil, fmt.Errorf("built-in eq expects at least two arguments got %d", len(argTypes))
+			return nil, fmt.Errorf("built-in %s expects at least one argument got %d", funcIdent, len(argTypes))
 		}
 		first := argTypes[0]
 		for _, a := range argTypes[1:] {
@@ -192,7 +198,7 @@ func builtInCheck(global *Global, funcIdent string, nodes []parse.Node, argTypes
 		return first, nil
 	case "eq", "ge", "gt", "le", "lt", "ne":
 		if len(argTypes) < 2 {
-			return nil, fmt.Errorf("built-in eq expects at least two arguments got %d", len(argTypes))
+			return nil, fmt.Errorf("built-in %s expects at least two arguments got %d", funcIdent, len(argTypes))
 		}
 		return types.Universe.Lookup("bool").Type(), nil
 	case "call":
@@ -203,13 +209,16 @@ func builtInCheck(global *Global, funcIdent string, nodes []parse.Node, argTypes
 		if !ok {
 			return nil, fmt.Errorf("call expected a function signature")
 		}
-		return checkCallArguments(global, sig, argTypes[1:])
+		return checkCallArguments(global, "", sig, argTypes[1:])
 	case "not":
 		if len(argTypes) < 1 {
 			return nil, fmt.Errorf("built-in not expects at least one argument")
 		}
 		return types.Universe.Lookup("bool").Type(), nil
 	case "index":
+		if len(argTypes) < 1 {
+			return nil, fmt.Errorf("built-in index expects at least 1 argument got %d", len(argTypes))
+		}
 		result := argTypes[0]
 		for i := 1; i < len(argTypes); i++ {
 			at := argTypes[i]
