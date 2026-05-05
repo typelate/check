@@ -2,6 +2,10 @@
 
 ! check-templates
 stderr 'type check failed:.*index\.gohtml:1:6: executing "index\.gohtml" at <\.Missing>: Missing not found on example\.com/app\.Page'
+# Verbose output renders the type's source declaration, including its godoc comment.
+stderr '// Page represents an example page.'
+stderr 'type Page struct \{'
+stderr '\tTitle string'
 
 -- go.mod --
 module example.com/app
@@ -24,6 +28,7 @@ var (
 	templates = template.Must(template.ParseFS(source, "*"))
 )
 
+// Page represents an example page.
 type Page struct {
 	Title string
 }

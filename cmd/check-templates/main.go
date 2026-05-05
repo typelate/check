@@ -83,7 +83,7 @@ func run(dir string, args []string, stdout, stderr io.Writer) int {
 			loc, _ := t.ErrorContext(node)
 			writeCall(parseLocation(loc), t.Name, tp)
 		}); err != nil {
-			_, _ = fmt.Fprintln(stderr, err)
+			_, _ = fmt.Fprintln(stderr, check.FormatVerbose(err))
 			exitCode = 1
 		}
 	}
