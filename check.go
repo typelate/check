@@ -35,9 +35,16 @@ func wrapError(tree *parse.Tree, node parse.Node, err error) *Error {
 	}
 }
 
+// Error returns the single-line error message. The format is
+//
+//	{file}:{line}:{col}: executing {tree-name} at <{node-text}>: {message}
+//
+// The leading file:line:col is recognized by terminals and IDEs as a
+// jump-to-source location. The message after the location matches the
+// shape produced by text/template at runtime.
 func (e *Error) Error() string {
 	loc, ctx := e.Tree.ErrorContext(e.Node)
-	return fmt.Sprintf("type check failed: %s: executing %q at <%s>: %s", loc, e.Tree.Name, ctx, e.err.Error())
+	return fmt.Sprintf("%s: executing %q at <%s>: %s", loc, e.Tree.Name, ctx, e.err.Error())
 }
 
 func (e *Error) Unwrap() error {
@@ -50,7 +57,7 @@ func (e *Error) Unwrap() error {
 // is indented on subsequent lines.
 func (e *Error) VerboseError() string {
 	loc, ctx := e.Tree.ErrorContext(e.Node)
-	prefix := fmt.Sprintf("type check failed: %s: executing %q at <%s>: ", loc, e.Tree.Name, ctx)
+	prefix := fmt.Sprintf("%s: executing %q at <%s>: ", loc, e.Tree.Name, ctx)
 	var v VerboseErrorer
 	if !errors.As(e.err, &v) {
 		return prefix + e.err.Error()
