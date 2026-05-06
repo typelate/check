@@ -1,7 +1,7 @@
 # Template check fails when a field does not exist on the data type.
 
 ! check-templates
-stderr 'index\.gohtml:1:6: executing "index\.gohtml" at <\.Missing>: Missing not found on example\.com/app\.Page'
+stderr 'index\.gohtml:1:6: executing "index\.gohtml" at <\.Missing>: field or method Missing not found on example\.com/app\.Page'
 # Verbose output renders the type's source declaration, including its godoc comment.
 stderr '// Page represents an example page.'
 stderr 'type Page struct \{'
