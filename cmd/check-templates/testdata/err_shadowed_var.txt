@@ -5,7 +5,7 @@
 # data type to the inner call should produce an error only for that call.
 
 ! check-templates
-stderr 'about\.gohtml:1:5: executing "about\.gohtml" at <\.Name>: Name not found on example\.com/app\.IndexPage'
+stderr 'about\.gohtml:1:5: executing "about\.gohtml" at <\.Name>: field or method Name not found on example\.com/app\.IndexPage'
 ! stderr 'Title not found'
 
 -- go.mod --

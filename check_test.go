@@ -728,7 +728,7 @@ func TestTree(t *testing.T) {
 			Data:     nil,
 			Error: func(t *testing.T, checkErr, execErr error, tp types.Type) {
 				assert.NoError(t, execErr)
-				require.ErrorContains(t, checkErr, `template:1:8: executing "template" at <.Unknown>: Unknown not found on untyped nil`)
+				require.ErrorContains(t, checkErr, `template:1:8: executing "template" at <.Unknown>: field or method Unknown not found on untyped nil`)
 				require.ErrorContains(t, checkErr, "no exported fields or methods")
 			},
 		},
@@ -738,7 +738,7 @@ func TestTree(t *testing.T) {
 			Data:     nil,
 			Error: func(t *testing.T, checkErr, execErr error, tp types.Type) {
 				assert.NoError(t, execErr)
-				require.ErrorContains(t, checkErr, `template:1:7: executing "template" at <.Unknown>: Unknown not found on untyped nil`)
+				require.ErrorContains(t, checkErr, `template:1:7: executing "template" at <.Unknown>: field or method Unknown not found on untyped nil`)
 				require.ErrorContains(t, checkErr, "no exported fields or methods")
 			},
 		},

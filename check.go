@@ -113,6 +113,7 @@ func (g *Global) TypeString(typ types.Type) string {
 // because it follows up with a source declaration of the receiver type.
 func (g *Global) formatNotFoundParts(ident string, tp types.Type) (bare, full string) {
 	var b strings.Builder
+	b.WriteString("field or method ")
 	b.WriteString(ident)
 	b.WriteString(" not found on ")
 	b.WriteString(g.TypeString(tp))
