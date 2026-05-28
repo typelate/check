@@ -486,6 +486,43 @@ func TestTree(t *testing.T) {
 			},
 		},
 		{
+			Name:     "range over int data body has bad field",
+			Template: `{{range .}}{{.NoSuchField}}{{end}}`,
+			Data:     int(0),
+			Error: func(t *testing.T, checkErr, _ error, _ types.Type) {
+				require.ErrorContains(t, checkErr, "NoSuchField")
+			},
+		},
+		{
+			Name:     "range over int data else has bad field",
+			Template: `{{range .}}body{{else}}{{.NoSuchField}}{{end}}`,
+			Data:     int(0),
+			Error: func(t *testing.T, checkErr, _ error, _ types.Type) {
+				require.ErrorContains(t, checkErr, "NoSuchField")
+			},
+		},
+		{
+			Name:     "range over iter.Seq body has bad field",
+			Template: `{{range .Field}}{{.NoSuchField}}{{end}}`,
+			Data:     NewIterators(),
+			Error: func(t *testing.T, checkErr, _ error, _ types.Type) {
+				require.ErrorContains(t, checkErr, "NoSuchField")
+			},
+		},
+		{
+			Name:     "range over iter.Seq2 body has bad field",
+			Template: `{{range .Field2}}{{.NoSuchField}}{{end}}`,
+			Data:     NewIterators(),
+			Error: func(t *testing.T, checkErr, _ error, _ types.Type) {
+				require.ErrorContains(t, checkErr, "NoSuchField")
+			},
+		},
+		{
+			Name:     "range over iter.Seq2 with two vars: dot is value type",
+			Template: `{{range $k, $v := .Field2}}{{expectFloat64 .}}{{end}}`,
+			Data:     NewIterators(),
+		},
+		{
 			Name:     "when a variable is used",
 			Template: `{{$v := 1}}{{.F $v}}`,
 			Data:     MethodWithIntParam{},
