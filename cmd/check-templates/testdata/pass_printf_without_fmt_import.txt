@@ -1,0 +1,37 @@
+# printf/print/println stay checkable even when the package under test only
+# imports fmt transitively: every checkable package imports html/template or
+# text/template, which import fmt, and dependency type information is loaded
+# completely so the walk down the dependency tree finds fmt's signatures.
+
+check-templates
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- main.go --
+package main
+
+import (
+	"embed"
+	"html/template"
+	"net/http"
+)
+
+var (
+	//go:embed *.gohtml
+	source embed.FS
+
+	templates = template.Must(template.ParseFS(source, "*"))
+)
+
+type Page struct {
+	Title string
+}
+
+func handle(w http.ResponseWriter, r *http.Request) {
+	_ = templates.ExecuteTemplate(w, "index.gohtml", Page{Title: "Home"})
+}
+
+-- index.gohtml --
+<h1>{{printf "%q" .Title}}</h1>

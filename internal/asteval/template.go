@@ -575,9 +575,23 @@ func DefaultFunctions(pkg *types.Package) TemplateFunctions {
 	if !ok || fmtPkg == nil {
 		return funcTypeMap
 	}
-	funcTypeMap["printf"] = fmtPkg.Scope().Lookup("Sprintf").Type().(*types.Signature)
-	funcTypeMap["print"] = fmtPkg.Scope().Lookup("Sprint").Type().(*types.Signature)
-	funcTypeMap["println"] = fmtPkg.Scope().Lookup("Sprintln").Type().(*types.Signature)
+	// A transitively imported fmt may be loaded shallowly with an empty
+	// scope, so each lookup can come back nil.
+	for templateFunc, fmtIdent := range map[string]string{
+		"printf":  "Sprintf",
+		"print":   "Sprint",
+		"println": "Sprintln",
+	} {
+		obj := fmtPkg.Scope().Lookup(fmtIdent)
+		if obj == nil {
+			continue
+		}
+		sig, ok := obj.Type().(*types.Signature)
+		if !ok {
+			continue
+		}
+		funcTypeMap[templateFunc] = sig
+	}
 	return funcTypeMap
 }
 

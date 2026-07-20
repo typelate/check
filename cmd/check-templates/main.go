@@ -62,9 +62,15 @@ func run(dir string, args []string, stdout, stderr io.Writer) int {
 	fset := token.NewFileSet()
 	pkgs, err := packages.Load(&packages.Config{
 		Fset: fset,
+		// NeedDeps keeps dependency type information complete: template
+		// functions like printf resolve through the dependency tree (every
+		// checkable package imports html/template or text/template, which
+		// import fmt), and a shallowly loaded dependency would leave those
+		// scopes empty.
 		Mode: packages.NeedTypesInfo | packages.NeedName | packages.NeedFiles |
 			packages.NeedTypes | packages.NeedSyntax | packages.NeedEmbedPatterns |
-			packages.NeedEmbedFiles | packages.NeedImports | packages.NeedModule,
+			packages.NeedEmbedFiles | packages.NeedImports | packages.NeedModule |
+			packages.NeedDeps,
 		Dir: dir,
 	}, loadArgs...)
 	if err != nil {
