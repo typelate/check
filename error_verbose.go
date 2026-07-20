@@ -254,6 +254,18 @@ func FormatVerbose(err error) string {
 // and returns each non-joined leaf in the order they appear. Errors that do
 // not multi-unwrap are returned as-is.
 func flattenJoined(err error) []error {
+	// A leaf *Error multi-unwraps to expose its cause, but renders as a
+	// single verbose block; only aggregates flatten into their children.
+	if e, ok := err.(*Error); ok {
+		if len(e.children) == 0 {
+			return []error{e}
+		}
+		var out []error
+		for _, child := range e.children {
+			out = append(out, flattenJoined(child)...)
+		}
+		return out
+	}
 	type multi interface{ Unwrap() []error }
 	if m, ok := err.(multi); ok {
 		var out []error

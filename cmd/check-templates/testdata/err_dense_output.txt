@@ -1,0 +1,44 @@
+# Error output is dense: every failure prints as one jump-to-source line
+# first, and each referenced type declaration is rendered once, after the
+# error lines, no matter how many errors mention it.
+
+! check-templates
+stderr 'index\.gohtml:1:6: executing "index\.gohtml" at <\.Heading>: field or method Heading not found on example\.com/app\.IndexPage'
+stderr 'index\.gohtml:1:23: executing "index\.gohtml" at <\.Missing>: field or method Missing not found on example\.com/app\.IndexPage'
+stderr 'index\.gohtml:1:41: executing "index\.gohtml" at <\.Title\.Bad>: field or method Bad not found on string'
+stderr -count=1 'type IndexPage struct \{'
+! stderr 'type: string'
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- main.go --
+package main
+
+import (
+	"embed"
+	"fmt"
+	"html/template"
+	"net/http"
+)
+
+var (
+	//go:embed *.gohtml
+	source embed.FS
+
+	templates = template.Must(template.ParseFS(source, "*"))
+)
+
+type IndexPage struct {
+	Title string
+}
+
+func handleIndex(w http.ResponseWriter, r *http.Request) {
+	_ = templates.ExecuteTemplate(w, "index.gohtml", IndexPage{Title: "Home"})
+}
+
+var _ = fmt.Sprint
+
+-- index.gohtml --
+<h1>{{.Heading}}</h1>{{.Missing}}{{.Title.Bad}}

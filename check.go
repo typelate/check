@@ -13,22 +13,151 @@ import (
 	"text/template/parse"
 )
 
-type Error struct {
-	Tree *parse.Tree
-	Node parse.Node
-	err  error
+// ErrorType classifies the failure a *Error reports. It lets tools such as
+// language servers map errors to stable diagnostic codes without parsing
+// error messages.
+type ErrorType int
+
+const (
+	// ErrorTypeUnknown marks errors not classified by this package, such as
+	// those returned by a custom CallChecker implementation.
+	ErrorTypeUnknown ErrorType = iota
+	// ErrorTypeAggregate marks an error that only groups child errors.
+	ErrorTypeAggregate
+	// ErrorTypeUnexpectedNode reports a parse node the checker does not know
+	// how to walk.
+	ErrorTypeUnexpectedNode
+	// ErrorTypeVariableNotFound reports use of an undeclared template variable.
+	ErrorTypeVariableNotFound
+	// ErrorTypeConstantOverflow reports a numeric constant that overflows int.
+	ErrorTypeConstantOverflow
+	// ErrorTypeTemplateNotFound reports invoking an undefined associated template.
+	ErrorTypeTemplateNotFound
+	// ErrorTypeBadCommand reports a command that cannot be evaluated, such as nil.
+	ErrorTypeBadCommand
+	// ErrorTypeNotAFunction reports arguments given to a non-function value.
+	ErrorTypeNotAFunction
+	// ErrorTypeFieldNotExported reports access to an unexported field or method.
+	ErrorTypeFieldNotExported
+	// ErrorTypeFieldOrMethodNotFound reports a field or method lookup failure.
+	ErrorTypeFieldOrMethodNotFound
+	// ErrorTypeBadSignature reports a method or function whose signature is
+	// not callable from a template.
+	ErrorTypeBadSignature
+	// ErrorTypeCallArguments reports a call with the wrong number or types of
+	// arguments.
+	ErrorTypeCallArguments
+	// ErrorTypeUnknownFunction reports a call to an undefined function.
+	ErrorTypeUnknownFunction
+	// ErrorTypeRange reports a range over a type that cannot be iterated.
+	ErrorTypeRange
+	// ErrorTypeIdentifierChain reports a field chain through a type that does
+	// not support further selection.
+	ErrorTypeIdentifierChain
+	// ErrorTypeMapKey reports a map index whose key cannot match the map's
+	// key type.
+	ErrorTypeMapKey
+)
+
+// String returns a stable slug for the error type, suitable for use as a
+// diagnostic code.
+func (t ErrorType) String() string {
+	switch t {
+	case ErrorTypeAggregate:
+		return "aggregate"
+	case ErrorTypeUnexpectedNode:
+		return "unexpected-node"
+	case ErrorTypeVariableNotFound:
+		return "variable-not-found"
+	case ErrorTypeConstantOverflow:
+		return "constant-overflow"
+	case ErrorTypeTemplateNotFound:
+		return "template-not-found"
+	case ErrorTypeBadCommand:
+		return "bad-command"
+	case ErrorTypeNotAFunction:
+		return "not-a-function"
+	case ErrorTypeFieldNotExported:
+		return "field-not-exported"
+	case ErrorTypeFieldOrMethodNotFound:
+		return "field-or-method-not-found"
+	case ErrorTypeBadSignature:
+		return "bad-signature"
+	case ErrorTypeCallArguments:
+		return "call-arguments"
+	case ErrorTypeUnknownFunction:
+		return "unknown-function"
+	case ErrorTypeRange:
+		return "range"
+	case ErrorTypeIdentifierChain:
+		return "identifier-chain"
+	case ErrorTypeMapKey:
+		return "map-key"
+	default:
+		return "unknown"
+	}
 }
 
-func newError(tree *parse.Tree, node parse.Node, message string, args ...any) *Error {
+type Error struct {
+	// Type classifies the failure.
+	Type ErrorType
+
+	Tree *parse.Tree
+	Node parse.Node
+
+	// X is the type most relevant to the failure: the receiver for field or
+	// method lookups, the pipeline result for range, the signature for call
+	// errors. It is nil when no type is relevant.
+	X types.Type
+
+	err error
+
+	// children holds the child errors when this error aggregates several
+	// independent failures found while walking the same subtree.
+	children []*Error
+}
+
+func newError(errType ErrorType, tree *parse.Tree, node parse.Node, message string, args ...any) *Error {
+	e := errorf(errType, message, args...)
+	e.Tree = tree
+	e.Node = node
+	return e
+}
+
+// errorf builds a located-later *Error: the walk site that receives it fills
+// in Tree and Node via wrapError.
+func errorf(errType ErrorType, message string, args ...any) *Error {
 	return &Error{
-		Tree: tree,
-		Node: node,
+		Type: errType,
 		err:  fmt.Errorf(message, args...),
 	}
 }
 
-func wrapError(tree *parse.Tree, node parse.Node, err error) *Error {
+// withX sets the type most relevant to the failure and returns e.
+func (e *Error) withX(x types.Type) *Error {
+	e.X = x
+	return e
+}
+
+// wrapError locates err at node. When err is already a *Error, its missing
+// location and classification are filled in on a copy; otherwise err becomes
+// the cause of a new leaf error.
+func wrapError(errType ErrorType, tree *parse.Tree, node parse.Node, err error) *Error {
+	if e, ok := err.(*Error); ok {
+		located := *e
+		if located.Tree == nil {
+			located.Tree = tree
+		}
+		if located.Node == nil {
+			located.Node = node
+		}
+		if located.Type == ErrorTypeUnknown {
+			located.Type = errType
+		}
+		return &located
+	}
 	return &Error{
+		Type: errType,
 		Tree: tree,
 		Node: node,
 		err:  err,
@@ -43,12 +172,77 @@ func wrapError(tree *parse.Tree, node parse.Node, err error) *Error {
 // jump-to-source location. The message after the location matches the
 // shape produced by text/template at runtime.
 func (e *Error) Error() string {
+	if len(e.children) > 0 {
+		messages := make([]string, len(e.children))
+		for i, child := range e.children {
+			messages[i] = child.Error()
+		}
+		return strings.Join(messages, "\n")
+	}
+	if e.Tree == nil || e.Node == nil {
+		return e.err.Error()
+	}
 	loc, ctx := e.Tree.ErrorContext(e.Node)
 	return fmt.Sprintf("%s: executing %q at <%s>: %s", loc, e.Tree.Name, ctx, e.err.Error())
 }
 
-func (e *Error) Unwrap() error {
-	return e.err
+// Unwrap exposes the underlying errors: the wrapped cause for a leaf error,
+// or the child errors for an aggregate.
+func (e *Error) Unwrap() []error {
+	errs := make([]error, 0, len(e.children)+1)
+	if e.err != nil {
+		errs = append(errs, e.err)
+	}
+	for _, child := range e.children {
+		errs = append(errs, child)
+	}
+	return errs
+}
+
+// All is an iter.Seq[*Error] that walks the error tree in depth-first
+// pre-order, yielding e itself first and then the subtree of each child:
+//
+//	for err := range checkErr.All { ... }
+func (e *Error) All(yield func(*Error) bool) {
+	e.walkAll(yield)
+}
+
+func (e *Error) walkAll(yield func(*Error) bool) bool {
+	if !yield(e) {
+		return false
+	}
+	for _, child := range e.children {
+		if !child.walkAll(yield) {
+			return false
+		}
+	}
+	return true
+}
+
+// joinErrors combines the non-nil errors found while walking node into a
+// single error: nil when there are none, the error itself when there is one,
+// and an aggregate *Error otherwise. Errors that are not *Error are promoted
+// to leaf errors located at node.
+func joinErrors(tree *parse.Tree, node parse.Node, errs ...error) error {
+	var children []*Error
+	for _, err := range errs {
+		if err == nil {
+			continue
+		}
+		child, ok := err.(*Error)
+		if !ok {
+			child = wrapError(ErrorTypeUnknown, tree, node, err)
+		}
+		children = append(children, child)
+	}
+	switch len(children) {
+	case 0:
+		return nil
+	case 1:
+		return children[0]
+	default:
+		return &Error{Type: ErrorTypeAggregate, Tree: tree, Node: node, children: children}
+	}
 }
 
 // VerboseError returns a (possibly) multi-line message. The single-line
@@ -56,8 +250,18 @@ func (e *Error) Unwrap() error {
 // implements VerboseErrorer and contributes additional detail, that detail
 // is indented on subsequent lines.
 func (e *Error) VerboseError() string {
-	loc, ctx := e.Tree.ErrorContext(e.Node)
-	prefix := fmt.Sprintf("%s: executing %q at <%s>: ", loc, e.Tree.Name, ctx)
+	if len(e.children) > 0 {
+		blocks := make([]string, len(e.children))
+		for i, child := range e.children {
+			blocks[i] = child.VerboseError()
+		}
+		return strings.Join(blocks, "\n\n")
+	}
+	var prefix string
+	if e.Tree != nil && e.Node != nil {
+		loc, ctx := e.Tree.ErrorContext(e.Node)
+		prefix = fmt.Sprintf("%s: executing %q at <%s>: ", loc, e.Tree.Name, ctx)
+	}
 	var v VerboseErrorer
 	if !errors.As(e.err, &v) {
 		return prefix + e.err.Error()
@@ -210,6 +414,13 @@ type CallChecker interface {
 
 type TypeNodeMapping map[types.Type][]parse.Node
 
+// Execute type-checks tree against data, the type of the template's root
+// context (dot). It returns nil when the template checks cleanly. Otherwise
+// the returned error is a *Error: a single leaf for one failure, or an
+// ErrorTypeAggregate node grouping every independent failure found. Walk the
+// full tree with Error.All or Unwrap; each leaf carries the ErrorType
+// classification, the parse.Tree and parse.Node it was found at, and, when
+// relevant, the types.Type being checked.
 func Execute(global *Global, tree *parse.Tree, data types.Type) error {
 	s := &scope{
 		global: global,
@@ -280,7 +491,7 @@ func (s *scope) walk(tree *parse.Tree, dot, prev types.Type, node parse.Node) (t
 	case *parse.ContinueNode:
 		return nil, nil
 	default:
-		return nil, newError(tree, n, "missing node type check %T", n)
+		return nil, newError(ErrorTypeUnexpectedNode, tree, n, "missing node type check %T", n)
 	}
 }
 
@@ -295,18 +506,19 @@ func (s *scope) checkChainNode(tree *parse.Tree, dot, prev types.Type, n *parse.
 func (s *scope) checkVariableNode(tree *parse.Tree, n *parse.VariableNode, args []types.Type) (types.Type, error) {
 	tp, ok := s.variables[n.Ident[0]]
 	if !ok {
-		return nil, newError(tree, n, "variable %s not found", n.Ident[0])
+		return nil, newError(ErrorTypeVariableNotFound, tree, n, "variable %s not found", n.Ident[0])
 	}
 	return s.checkIdentifiers(tree, tp, n, n.Ident[1:], args)
 }
 
 func (s *scope) checkListNode(tree *parse.Tree, dot, prev types.Type, n *parse.ListNode) error {
+	var errs []error
 	for _, child := range n.Nodes {
 		if _, err := s.walk(tree, dot, prev, child); err != nil {
-			return err
+			errs = append(errs, err)
 		}
 	}
-	return nil
+	return joinErrors(tree, n, errs...)
 }
 
 func (s *scope) checkActionNode(tree *parse.Tree, dot, prev types.Type, n *parse.ActionNode) error {
@@ -330,40 +542,44 @@ func (s *scope) checkPipeNode(tree *parse.Tree, dot types.Type, n *parse.PipeNod
 }
 
 func (s *scope) checkIfNode(tree *parse.Tree, dot types.Type, n *parse.IfNode) error {
-	_, err := s.walk(tree, dot, nil, n.Pipe)
-	if err != nil {
-		return err
+	var errs []error
+	if _, err := s.walk(tree, dot, nil, n.Pipe); err != nil {
+		errs = append(errs, err)
 	}
 	ifScope := s.child()
 	if _, err := ifScope.walk(tree, dot, nil, n.List); err != nil {
-		return err
+		errs = append(errs, err)
 	}
 	if n.ElseList != nil {
 		elseScope := s.child()
 		if _, err := elseScope.walk(tree, dot, nil, n.ElseList); err != nil {
-			return err
+			errs = append(errs, err)
 		}
 	}
-	return nil
+	return joinErrors(tree, n, errs...)
 }
 
 func (s *scope) checkWithNode(tree *parse.Tree, dot types.Type, n *parse.WithNode) error {
+	var errs []error
 	child := s.child()
 	x, err := child.walk(tree, dot, nil, n.Pipe)
 	if err != nil {
-		return err
-	}
-	withScope := child.child()
-	if _, err := withScope.walk(tree, x, nil, n.List); err != nil {
-		return err
+		// The body's dot is unknown when the pipe fails, so only the
+		// pipe and the else list (which keeps the outer dot) are checked.
+		errs = append(errs, err)
+	} else {
+		withScope := child.child()
+		if _, err := withScope.walk(tree, x, nil, n.List); err != nil {
+			errs = append(errs, err)
+		}
 	}
 	if n.ElseList != nil {
 		elseScope := child.child()
 		if _, err := elseScope.walk(tree, dot, nil, n.ElseList); err != nil {
-			return err
+			errs = append(errs, err)
 		}
 	}
-	return nil
+	return joinErrors(tree, n, errs...)
 }
 
 func newNumberNodeType(tree *parse.Tree, constant *parse.NumberNode) (types.Type, error) {
@@ -379,12 +595,12 @@ func newNumberNodeType(tree *parse.Tree, constant *parse.NumberNode) (types.Type
 	case constant.IsInt:
 		n := int(constant.Int64)
 		if int64(n) != constant.Int64 {
-			return nil, newError(tree, constant, "%s overflows int", constant.Text)
+			return nil, newError(ErrorTypeConstantOverflow, tree, constant, "%s overflows int", constant.Text)
 		}
 		return types.Typ[types.UntypedInt], nil
 
 	case constant.IsUint:
-		return nil, newError(tree, constant, "%s overflows int", constant.Text)
+		return nil, newError(ErrorTypeConstantOverflow, tree, constant, "%s overflows int", constant.Text)
 	}
 	return types.Typ[types.UntypedInt], nil
 }
@@ -399,31 +615,45 @@ func isHexInt(s string) bool {
 
 func (s *scope) checkTemplateNode(tree *parse.Tree, dot types.Type, n *parse.TemplateNode) error {
 	x := dot
+	var errs []error
+	pipeOK := true
 	if n.Pipe != nil {
 		tp, err := s.walk(tree, x, nil, n.Pipe)
 		if err != nil {
-			return err
+			// The invoked template's dot is unknown when the pipe fails,
+			// so only the pipe and the template lookup are checked.
+			errs = append(errs, err)
+			pipeOK = false
+		} else {
+			x = downgradeUntyped(tp)
 		}
-		x = tp
-		x = downgradeUntyped(x)
 	} else {
 		x = types.Typ[types.UntypedNil]
 	}
-	if fn := s.global.InspectTemplateNode; fn != nil {
+	if fn := s.global.InspectTemplateNode; fn != nil && pipeOK {
 		fn(n, tree, x)
 	}
 	childTree, ok := s.global.trees.FindTree(n.Name)
 	if !ok {
-		return newError(tree, n, "template %q not found", n.Name)
+		notFound := newError(ErrorTypeTemplateNotFound, tree, n, "template %q not found", n.Name)
+		if pipeOK {
+			notFound.X = x
+		}
+		errs = append(errs, notFound)
+		return joinErrors(tree, n, errs...)
 	}
-	childScope := scope{
-		global: s.global,
-		variables: map[string]types.Type{
-			"$": x,
-		},
+	if pipeOK {
+		childScope := scope{
+			global: s.global,
+			variables: map[string]types.Type{
+				"$": x,
+			},
+		}
+		if _, err := childScope.walk(childTree, x, nil, childTree.Root); err != nil {
+			errs = append(errs, err)
+		}
 	}
-	_, err := childScope.walk(childTree, x, nil, childTree.Root)
-	return err
+	return joinErrors(tree, n, errs...)
 }
 
 func downgradeUntyped(x types.Type) types.Type {
@@ -476,7 +706,7 @@ func (s *scope) checkCommandNode(tree *parse.Tree, dot, prev types.Type, cmd *pa
 		}
 		tp, err := s.global.calls.CheckCall(s.global, n.Ident, cmd.Args[1:], argTypes)
 		if err != nil {
-			return nil, wrapError(tree, cmd, err)
+			return nil, wrapError(ErrorTypeUnknown, tree, cmd, err)
 		}
 		return tp, nil
 	case *parse.PipeNode:
@@ -506,20 +736,25 @@ func (s *scope) checkCommandNode(tree *parse.Tree, dot, prev types.Type, cmd *pa
 	case *parse.DotNode:
 		return dot, nil
 	case *parse.NilNode:
-		return nil, newError(tree, n, "nil is not a command")
+		return nil, newError(ErrorTypeBadCommand, tree, n, "nil is not a command")
 	default:
-		return nil, newError(tree, first, "can't evaluate command %q", first)
+		return nil, newError(ErrorTypeBadCommand, tree, first, "can't evaluate command %q", first)
 	}
 }
 
 func (s *scope) argumentTypes(tree *parse.Tree, dot types.Type, prev types.Type, args []parse.Node) ([]types.Type, error) {
 	argTypes := make([]types.Type, 0, len(args)+1)
+	var errs []error
 	for _, arg := range args {
 		argType, err := s.walk(tree, dot, prev, arg)
 		if err != nil {
-			return nil, err
+			errs = append(errs, err)
+			continue
 		}
 		argTypes = append(argTypes, argType)
+	}
+	if err := joinErrors(tree, nil, errs...); err != nil {
+		return nil, err
 	}
 	if prev != nil {
 		argTypes = append(argTypes, prev)
@@ -529,7 +764,7 @@ func (s *scope) argumentTypes(tree *parse.Tree, dot types.Type, prev types.Type,
 
 func (s *scope) notAFunction(tree *parse.Tree, node parse.Node, args []parse.Node, final types.Type) error {
 	if len(args) > 1 || final != nil {
-		return newError(tree, node, "can't give argument to non-function %s", args[0])
+		return newError(ErrorTypeNotAFunction, tree, node, "can't give argument to non-function %s", args[0])
 	}
 	return nil
 }
@@ -537,14 +772,14 @@ func (s *scope) notAFunction(tree *parse.Tree, node parse.Node, args []parse.Nod
 // identErr builds an *Error wrapping an *IdentifierError. The location
 // prefix is added by *Error at format time; the IdentifierError carries
 // the full type so callers of FormatVerbose can render its structure.
-func (s *scope) identErr(tree *parse.Tree, n parse.Node, ident string, tp types.Type, format string, a ...any) *Error {
-	return wrapError(tree, n, &IdentifierError{
+func (s *scope) identErr(errType ErrorType, tree *parse.Tree, n parse.Node, ident string, tp types.Type, format string, a ...any) *Error {
+	return wrapError(errType, tree, n, &IdentifierError{
 		Identifier: ident,
 		Type:       tp,
 		Cause:      fmt.Errorf(format, a...),
 		qualifier:  s.global.Qualifier,
 		fset:       s.global.fileSet,
-	})
+	}).withX(tp)
 }
 
 func (s *scope) checkIdentifiers(tree *parse.Tree, dot types.Type, n parse.Node, idents []string, args []types.Type) (types.Type, error) {
@@ -562,7 +797,7 @@ func (s *scope) checkIdentifiers(tree *parse.Tree, dot types.Type, n parse.Node,
 					x = xx.Elem()
 					_, err := strconv.Atoi(ident)
 					if err != nil {
-						return nil, s.identErr(tree, n, ident, xx, `can't evaluate field one in type %s`, s.global.TypeString(xx))
+						return nil, s.identErr(ErrorTypeMapKey, tree, n, ident, xx, `can't evaluate field one in type %s`, s.global.TypeString(xx))
 					}
 				case types.String:
 					x = xx.Elem()
@@ -575,19 +810,19 @@ func (s *scope) checkIdentifiers(tree *parse.Tree, dot types.Type, n parse.Node,
 			continue
 		default:
 			if !token.IsExported(ident) {
-				return nil, s.identErr(tree, n, ident, x, "field or method %s is not exported", ident)
+				return nil, s.identErr(ErrorTypeFieldNotExported, tree, n, ident, x, "field or method %s is not exported", ident)
 			}
 			obj, _, _ := types.LookupFieldOrMethod(x, true, s.global.pkg, ident)
 			if obj == nil {
 				bare, full := s.global.formatNotFoundParts(ident, x)
-				return nil, wrapError(tree, n, &IdentifierError{
+				return nil, wrapError(ErrorTypeFieldOrMethodNotFound, tree, n, &IdentifierError{
 					Identifier: ident,
 					Type:       x,
 					Cause:      errors.New(full),
 					bareCause:  bare,
 					qualifier:  s.global.Qualifier,
 					fset:       s.global.fileSet,
-				})
+				}).withX(x)
 			}
 			switch o := obj.(type) {
 			default:
@@ -597,34 +832,34 @@ func (s *scope) checkIdentifiers(tree *parse.Tree, dot types.Type, n parse.Node,
 				resultLen := sig.Results().Len()
 				if resultLen < 1 || resultLen > 2 {
 					methodPos := s.global.fileSet.Position(o.Pos())
-					return nil, s.identErr(tree, n, ident, sig, "function %s has %d return values; should be 1 or 2: incorrect signature at %s", ident, resultLen, methodPos)
+					return nil, s.identErr(ErrorTypeBadSignature, tree, n, ident, sig, "function %s has %d return values; should be 1 or 2: incorrect signature at %s", ident, resultLen, methodPos)
 				}
 				if resultLen > 1 {
 					methodPos := s.global.fileSet.Position(obj.Pos())
 					finalResult := sig.Results().At(sig.Results().Len() - 1)
 					errorType := types.Universe.Lookup("error")
 					if !types.Identical(errorType.Type(), finalResult.Type()) {
-						return nil, s.identErr(tree, n, ident, sig, "invalid function signature for %s: second return value should be error; is %s: incorrect signature at %s", ident, s.global.TypeString(finalResult.Type()), methodPos)
+						return nil, s.identErr(ErrorTypeBadSignature, tree, n, ident, sig, "invalid function signature for %s: second return value should be error; is %s: incorrect signature at %s", ident, s.global.TypeString(finalResult.Type()), methodPos)
 					}
 				}
 				if i == len(idents)-1 {
 					res, err := checkCallArguments(s.global, ident, sig, args)
 					if err != nil {
-						return nil, wrapError(tree, n, err)
+						return nil, wrapError(ErrorTypeCallArguments, tree, n, err)
 					}
 					return res, nil
 				}
 				x = sig.Results().At(0).Type()
 			}
 			if _, ok := x.(*types.Signature); ok && i < len(idents)-1 {
-				return nil, s.identErr(tree, n, ident, x, "identifier chain not supported for type %s", s.global.TypeString(x))
+				return nil, s.identErr(ErrorTypeIdentifierChain, tree, n, ident, x, "identifier chain not supported for type %s", s.global.TypeString(x))
 			}
 		}
 	}
 	if len(args) > 0 {
 		sig, ok := x.(*types.Signature)
 		if !ok {
-			return nil, s.identErr(tree, n, "", x, "expected method or function")
+			return nil, s.identErr(ErrorTypeNotAFunction, tree, n, "", x, "expected method or function")
 		}
 		var name string
 		if len(idents) > 0 {
@@ -632,7 +867,7 @@ func (s *scope) checkIdentifiers(tree *parse.Tree, dot types.Type, n parse.Node,
 		}
 		tp, err := checkCallArguments(s.global, name, sig, args)
 		if err != nil {
-			return nil, wrapError(tree, n, err)
+			return nil, wrapError(ErrorTypeCallArguments, tree, n, err)
 		}
 		return tp, nil
 	}
@@ -687,7 +922,7 @@ func (s *scope) checkRangeNode(tree *parse.Tree, dot types.Type, n *parse.RangeN
 				child.variables[n.Pipe.Decl[0].Ident[0]] = x
 			}
 		default:
-			return newError(tree, n.Pipe, "range can't iterate over %s", strings.TrimPrefix(s.global.TypeString(pipeType), "untyped "))
+			return newError(ErrorTypeRange, tree, n.Pipe, "range can't iterate over %s", strings.TrimPrefix(s.global.TypeString(pipeType), "untyped ")).withX(pipeType)
 		}
 	case *types.Signature:
 		if v1, v2, ok := isIter2(pt); ok {
@@ -707,23 +942,24 @@ func (s *scope) checkRangeNode(tree *parse.Tree, dot types.Type, n *parse.RangeN
 				child.variables[n.Pipe.Decl[0].Ident[0]] = val
 			}
 			if len(n.Pipe.Decl) > 1 {
-				return newError(tree, n.Pipe, "iter.Seq[T] must not iterate over more than one variable")
+				return newError(ErrorTypeRange, tree, n.Pipe, "iter.Seq[T] must not iterate over more than one variable").withX(pipeType)
 			}
 		} else {
-			return newError(tree, n.Pipe, "failed to range over function %s", s.global.TypeString(pipeType))
+			return newError(ErrorTypeRange, tree, n.Pipe, "failed to range over function %s", s.global.TypeString(pipeType)).withX(pipeType)
 		}
 	default:
-		return newError(tree, n.Pipe, "failed to range over %s", s.global.TypeString(pipeType))
+		return newError(ErrorTypeRange, tree, n.Pipe, "failed to range over %s", s.global.TypeString(pipeType)).withX(pipeType)
 	}
+	var errs []error
 	if _, err := child.walk(tree, x, nil, n.List); err != nil {
-		return err
+		errs = append(errs, err)
 	}
 	if n.ElseList != nil {
 		if _, err := child.walk(tree, x, nil, n.ElseList); err != nil {
-			return err
+			errs = append(errs, err)
 		}
 	}
-	return nil
+	return joinErrors(tree, n, errs...)
 }
 
 func isIter(signature *types.Signature) (types.Type, bool) {
@@ -759,13 +995,13 @@ func (s *scope) checkIdentifierNode(tree *parse.Tree, n *parse.IdentifierNode) (
 	if !strings.HasPrefix(n.Ident, "$") {
 		tp, err := s.global.calls.CheckCall(s.global, n.Ident, nil, nil)
 		if err != nil {
-			return nil, wrapError(tree, n, err)
+			return nil, wrapError(ErrorTypeUnknown, tree, n, err)
 		}
 		return tp, err
 	}
 	tp, ok := s.variables[n.Ident]
 	if !ok {
-		return nil, newError(tree, n, "failed to find identifier %s", n.Ident)
+		return nil, newError(ErrorTypeVariableNotFound, tree, n, "failed to find identifier %s", n.Ident)
 	}
 	return tp, nil
 }

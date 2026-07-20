@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"go/ast"
@@ -83,11 +84,64 @@ func run(dir string, args []string, stdout, stderr io.Writer) int {
 			loc, _ := t.ErrorContext(node)
 			writeCall(parseLocation(loc), t.Name, tp)
 		}); err != nil {
-			_, _ = fmt.Fprintln(stderr, check.FormatVerbose(err))
+			writeCheckError(stderr, err)
 			exitCode = 1
 		}
 	}
 	return exitCode
+}
+
+// writeCheckError renders a check error tree densely: one jump-to-source
+// line per failure first, so the full set of problems can be scanned at a
+// glance, followed by each distinct supporting detail block (type
+// declarations, signatures) exactly once, no matter how many failures
+// reference it.
+func writeCheckError(stderr io.Writer, err error) {
+	var root *check.Error
+	if !errors.As(err, &root) {
+		_, _ = fmt.Fprintln(stderr, check.FormatVerbose(err))
+		return
+	}
+	var details []string
+	seen := make(map[string]bool)
+	for e := range root.All {
+		if e.Type == check.ErrorTypeAggregate {
+			continue
+		}
+		line, detail := splitVerbose(e)
+		_, _ = fmt.Fprintln(stderr, line)
+		if detail != "" && !seen[detail] && !redundantDetail(detail) {
+			seen[detail] = true
+			details = append(details, detail)
+		}
+	}
+	for _, detail := range details {
+		_, _ = fmt.Fprintf(stderr, "\n%s\n", detail)
+	}
+}
+
+// redundantDetail reports whether a detail block only restates the type
+// name already present in the error line (the single-line "type: T"
+// fallback used when no source declaration is available), rather than
+// adding a declaration, signature, or underlying type worth printing.
+func redundantDetail(detail string) bool {
+	first, rest, _ := strings.Cut(detail, "\n")
+	return strings.HasPrefix(strings.TrimSpace(first), "type: ") && strings.TrimSpace(rest) == ""
+}
+
+// splitVerbose splits an error's verbose rendering into its single-line
+// summary and the supporting detail that follows it, with leading blank
+// lines removed from the detail.
+func splitVerbose(e *check.Error) (line, detail string) {
+	line, detail, _ = strings.Cut(e.VerboseError(), "\n")
+	for detail != "" {
+		first, rest, _ := strings.Cut(detail, "\n")
+		if strings.TrimSpace(first) != "" {
+			break
+		}
+		detail = rest
+	}
+	return line, detail
 }
 
 type callRecord struct {

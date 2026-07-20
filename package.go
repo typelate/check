@@ -1,7 +1,6 @@
 package check
 
 import (
-	"errors"
 	"fmt"
 	"go/ast"
 	"go/token"
@@ -35,11 +34,13 @@ type ExecuteTemplateNodeInspectorFunc func(node *ast.CallExpr, t *parse.Tree, tp
 // and type-checks each call.
 //
 // ExecuteTemplate must be called with a string literal for the second parameter.
+//
+// A non-nil result is a *Error tree; see Execute for how to walk it.
 func Package(pkg *packages.Package, inspectCall ExecuteTemplateNodeInspectorFunc, inspectTemplate TemplateNodeInspectorFunc) error {
 	pending, receivers := findExecuteCalls(pkg)
 	resolved, resolveErrs := resolveTemplates(pkg, receivers)
 	callErr := checkCalls(pkg, pending, resolved, inspectCall, inspectTemplate)
-	return errors.Join(append(resolveErrs, callErr)...)
+	return joinErrors(nil, nil, append(resolveErrs, callErr)...)
 }
 
 // findExecuteCalls walks the package syntax looking for ExecuteTemplate calls
@@ -246,7 +247,7 @@ func checkCalls(pkg *packages.Package, pending []pendingCall, resolved map[types
 		}
 	}
 
-	return errors.Join(errs...)
+	return joinErrors(nil, nil, errs...)
 }
 
 func packageDirectory(pkg *packages.Package) string {
