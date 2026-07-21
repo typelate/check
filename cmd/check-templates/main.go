@@ -103,8 +103,8 @@ func run(dir string, args []string, stdout, stderr io.Writer) int {
 // declarations, signatures) exactly once, no matter how many failures
 // reference it.
 func writeCheckError(stderr io.Writer, err error) {
-	var root *check.Error
-	if !errors.As(err, &root) {
+	root, ok := errors.AsType[*check.Error](err)
+	if !ok {
 		_, _ = fmt.Fprintln(stderr, check.FormatVerbose(err))
 		return
 	}

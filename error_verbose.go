@@ -233,8 +233,7 @@ func FormatVerbose(err error) string {
 	parts := make([]string, len(leaves))
 	var anyVerbose bool
 	for i, leaf := range leaves {
-		var v VerboseErrorer
-		if errors.As(leaf, &v) {
+		if v, ok := errors.AsType[VerboseErrorer](leaf); ok {
 			parts[i] = v.VerboseError()
 			anyVerbose = true
 		} else {

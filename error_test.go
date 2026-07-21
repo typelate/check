@@ -177,6 +177,27 @@ func TestError_DetailedError(t *testing.T) {
 		require.Contains(t, sb.String(), "\n  Configure(struct{...}) string")
 	})
 
+	t.Run("write errors are propagated", func(t *testing.T) {
+		e := execute(t, `{{.Missing}}`, pageNamed)
+		require.Error(t, e.DetailedError(failWriter{}, nil))
+	})
+
+	t.Run("promoted fields through embedded pointers are listed", func(t *testing.T) {
+		base := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Base", nil),
+			types.NewStruct([]*types.Var{
+				types.NewField(token.NoPos, pkg, "Slug", types.Typ[types.String], false),
+			}, nil), nil)
+		data := types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "Base", types.NewPointer(base), true),
+		}, nil)
+
+		e := execute(t, `{{.Missing}}`, data)
+
+		var sb strings.Builder
+		require.NoError(t, e.DetailedError(&sb, webQualifier))
+		require.Contains(t, sb.String(), "\n  Slug string")
+	})
+
 	t.Run("aggregates render one block per failure", func(t *testing.T) {
 		e := execute(t, `{{.A}}{{.B}}`, pageNamed)
 
@@ -316,6 +337,58 @@ func TestExecute_error_classification(t *testing.T) {
 		require.ErrorAs(t, checkErr, &root)
 		require.Equal(t, check.ErrorTypeAggregate, root.Type)
 	})
+}
+
+// failWriter always fails so tests can observe write-error propagation.
+type failWriter struct{}
+
+func (failWriter) Write([]byte) (int, error) { return 0, fmt.Errorf("sink closed") }
+
+func TestError_Decl(t *testing.T) {
+	pkg := types.NewPackage("example.com/web", "web")
+	fset := token.NewFileSet()
+	file := fset.AddFile("page.go", -1, 100)
+	declPos := file.Pos(10)
+
+	pageNamed := types.NewNamed(
+		types.NewTypeName(declPos, pkg, "Page", nil),
+		types.NewStruct(nil, nil), nil)
+
+	tmpl, err := template.New("decl.gohtml").Parse(`{{.Missing}}`)
+	require.NoError(t, err)
+	global := check.NewGlobal(pkg, fset, findTextTemplateTree(tmpl), check.Functions{})
+	checkErr := check.Execute(global, tmpl.Tree, pageNamed)
+
+	leaf := findLeafError(t, checkErr)
+	require.True(t, leaf.Decl.IsValid(), "Decl should point at the receiver type declaration")
+	require.Equal(t, fset.Position(declPos), leaf.Decl)
+}
+
+func TestExecute_secondary_errors(t *testing.T) {
+	pkg := types.NewPackage("example.com/web", "web")
+	emptyStruct := types.NewStruct(nil, nil)
+
+	tmpl, err := template.New("secondary.gohtml").Parse(`{{$x := .Missing}}{{$x}}`)
+	require.NoError(t, err)
+	global := check.NewGlobal(pkg, token.NewFileSet(), findTextTemplateTree(tmpl), check.Functions{})
+	checkErr := check.Execute(global, tmpl.Tree, emptyStruct)
+
+	var root *check.Error
+	require.ErrorAs(t, checkErr, &root)
+	var leaves []*check.Error
+	for e := range root.All {
+		if e.Type != check.ErrorTypeAggregate {
+			leaves = append(leaves, e)
+		}
+	}
+	require.Len(t, leaves, 2)
+
+	require.Equal(t, check.ErrorTypeFieldOrMethodNotFound, leaves[0].Type)
+	require.False(t, leaves[0].Secondary, "the root cause is not secondary")
+
+	require.Equal(t, check.ErrorTypeVariableNotFound, leaves[1].Type)
+	require.True(t, leaves[1].Secondary,
+		"a variable lookup that failed because its declaration pipeline failed is a follow-on")
 }
 
 // findLeafError walks the error tree depth first and returns the first

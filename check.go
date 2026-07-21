@@ -109,6 +109,18 @@ type Error struct {
 	// errors. It is nil when no type is relevant.
 	X types.Type
 
+	// Decl is the source position where the Go declaration involved in the
+	// failure is defined: the receiver type for field or method lookups,
+	// the method for signature failures. It is the zero value when no
+	// declaration position is known.
+	Decl token.Position
+
+	// Secondary marks a follow-on failure whose root cause is another error
+	// in the same tree: a variable lookup that failed only because the
+	// pipeline declaring that variable already failed. Diagnostic tools may
+	// suppress or de-emphasize secondary errors.
+	Secondary bool
+
 	err error
 
 	// render re-renders the cause message with a caller-chosen type
@@ -144,6 +156,12 @@ func errorf(errType ErrorType, message string, args ...any) *Error {
 // withX sets the type most relevant to the failure and returns e.
 func (e *Error) withX(x types.Type) *Error {
 	e.X = x
+	return e
+}
+
+// withDecl sets the position of the involved Go declaration and returns e.
+func (e *Error) withDecl(pos token.Position) *Error {
+	e.Decl = pos
 	return e
 }
 
@@ -218,12 +236,10 @@ func (e *Error) messageWith(tf typeFormatFunc) string {
 	if e.render != nil {
 		return e.render(tf)
 	}
-	var identErr *IdentifierError
-	if errors.As(e.err, &identErr) && identErr.render != nil {
+	if identErr, ok := errors.AsType[*IdentifierError](e.err); ok && identErr.render != nil {
 		return identErr.render(tf)
 	}
-	var callErr *CallError
-	if errors.As(e.err, &callErr) && callErr.render != nil {
+	if callErr, ok := errors.AsType[*CallError](e.err); ok && callErr.render != nil {
 		return callErr.render(tf)
 	}
 	return e.err.Error()
@@ -326,8 +342,8 @@ func (e *Error) VerboseError() string {
 		loc, ctx := e.Tree.ErrorContext(e.Node)
 		prefix = fmt.Sprintf("%s: executing %q at <%s>: ", loc, e.Tree.Name, ctx)
 	}
-	var v VerboseErrorer
-	if !errors.As(e.err, &v) {
+	v, ok := errors.AsType[VerboseErrorer](e.err)
+	if !ok {
 		return prefix + e.err.Error()
 	}
 	verbose := v.VerboseError()
@@ -350,9 +366,11 @@ type Global struct {
 	InspectTemplateNode TemplateNodeInspectorFunc
 	InspectCallNode     ExecuteTemplateNodeInspectorFunc
 
-	// Qualifier controls how types are printed in error messages.
-	// If nil, types are printed with their full package path.
-	// See types.WriteType for details.
+	// Qualifier controls how types are printed by TypeString and by the
+	// legacy VerboseError/FormatVerbose rendering only. Error messages
+	// always print full package paths (nil qualifier), and DetailedError
+	// takes its own types.Qualifier parameter — prefer that for qualified
+	// rendering. See types.WriteType for qualifier semantics.
 	Qualifier types.Qualifier
 }
 
@@ -434,12 +452,32 @@ func Execute(global *Global, tree *parse.Tree, data types.Type) error {
 type scope struct {
 	global    *Global
 	variables map[string]types.Type
+
+	// failed records variables whose declaration pipeline failed to check,
+	// so later lookups can be marked Secondary instead of reported as
+	// independent failures.
+	failed map[string]bool
 }
 
 func (s *scope) child() *scope {
 	return &scope{
 		global:    s.global,
 		variables: maps.Clone(s.variables),
+		failed:    maps.Clone(s.failed),
+	}
+}
+
+// markFailedDecls records the variables a failing pipeline would have
+// declared.
+func (s *scope) markFailedDecls(n *parse.PipeNode) {
+	for _, decl := range n.Decl {
+		if len(decl.Ident) == 0 {
+			continue
+		}
+		if s.failed == nil {
+			s.failed = make(map[string]bool)
+		}
+		s.failed[decl.Ident[0]] = true
 	}
 }
 
@@ -505,7 +543,9 @@ func (s *scope) checkChainNode(tree *parse.Tree, dot, prev types.Type, n *parse.
 func (s *scope) checkVariableNode(tree *parse.Tree, n *parse.VariableNode, args []types.Type) (types.Type, error) {
 	tp, ok := s.variables[n.Ident[0]]
 	if !ok {
-		return nil, newError(ErrorTypeVariableNotFound, tree, n, "variable %s not found", n.Ident[0])
+		e := newError(ErrorTypeVariableNotFound, tree, n, "variable %s not found", n.Ident[0])
+		e.Secondary = s.failed[n.Ident[0]]
+		return nil, e
 	}
 	return s.checkIdentifiers(tree, tp, n, n.Ident[1:], args)
 }
@@ -530,6 +570,7 @@ func (s *scope) checkPipeNode(tree *parse.Tree, dot types.Type, n *parse.PipeNod
 	for _, cmd := range n.Cmds {
 		tp, err := s.walk(tree, dot, result, cmd)
 		if err != nil {
+			s.markFailedDecls(n)
 			return nil, err
 		}
 		result = tp
@@ -818,7 +859,7 @@ func (s *scope) checkIdentifiers(tree *parse.Tree, dot types.Type, n parse.Node,
 			obj, _, _ := types.LookupFieldOrMethod(x, true, s.global.pkg, ident)
 			if obj == nil {
 				render := notFoundMessage(ident, x, s.global.fileSet)
-				return nil, wrapError(ErrorTypeFieldOrMethodNotFound, tree, n, &IdentifierError{
+				notFound := wrapError(ErrorTypeFieldOrMethodNotFound, tree, n, &IdentifierError{
 					Identifier: ident,
 					Type:       x,
 					Cause:      errors.New(render(fullTypeFormat(nil))),
@@ -826,6 +867,10 @@ func (s *scope) checkIdentifiers(tree *parse.Tree, dot types.Type, n parse.Node,
 					qualifier:  s.global.Qualifier,
 					fset:       s.global.fileSet,
 				}).withX(x)
+				if named, ok := x.(*types.Named); ok {
+					notFound.Decl = s.global.fileSet.Position(named.Obj().Pos())
+				}
+				return nil, notFound
 			}
 			switch o := obj.(type) {
 			default:
@@ -835,14 +880,14 @@ func (s *scope) checkIdentifiers(tree *parse.Tree, dot types.Type, n parse.Node,
 				resultLen := sig.Results().Len()
 				if resultLen < 1 || resultLen > 2 {
 					methodPos := s.global.fileSet.Position(o.Pos())
-					return nil, s.identErr(ErrorTypeBadSignature, tree, n, ident, sig, "function %s has %d return values; should be 1 or 2: incorrect signature at %s", ident, resultLen, methodPos)
+					return nil, s.identErr(ErrorTypeBadSignature, tree, n, ident, sig, "function %s has %d return values; should be 1 or 2: incorrect signature at %s", ident, resultLen, methodPos).withDecl(methodPos)
 				}
 				if resultLen > 1 {
 					methodPos := s.global.fileSet.Position(obj.Pos())
 					finalResult := sig.Results().At(sig.Results().Len() - 1)
 					errorType := types.Universe.Lookup("error")
 					if !types.Identical(errorType.Type(), finalResult.Type()) {
-						return nil, s.identErr(ErrorTypeBadSignature, tree, n, ident, sig, "invalid function signature for %s: second return value should be error; is %s: incorrect signature at %s", ident, finalResult.Type(), methodPos)
+						return nil, s.identErr(ErrorTypeBadSignature, tree, n, ident, sig, "invalid function signature for %s: second return value should be error; is %s: incorrect signature at %s", ident, finalResult.Type(), methodPos).withDecl(methodPos)
 					}
 				}
 				if i == len(idents)-1 {
@@ -1004,7 +1049,9 @@ func (s *scope) checkIdentifierNode(tree *parse.Tree, n *parse.IdentifierNode) (
 	}
 	tp, ok := s.variables[n.Ident]
 	if !ok {
-		return nil, newError(ErrorTypeVariableNotFound, tree, n, "failed to find identifier %s", n.Ident)
+		e := newError(ErrorTypeVariableNotFound, tree, n, "failed to find identifier %s", n.Ident)
+		e.Secondary = s.failed[n.Ident]
+		return nil, e
 	}
 	return tp, nil
 }

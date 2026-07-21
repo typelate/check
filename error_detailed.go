@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"go/token"
 	"go/types"
+	"io"
 	"strings"
 )
 
@@ -31,33 +32,53 @@ const maxInlineTypeLength = 64
 // []struct{...}). The full types remain available on the Error's X field
 // and the IdentifierError/CallError causes.
 //
-// DetailedError always returns nil; the error result exists so callers can
-// treat it like an io-style write.
-func (e *Error) DetailedError(sb *strings.Builder, q types.Qualifier) error {
+// DetailedError returns the first error encountered writing to w, or nil.
+func (e *Error) DetailedError(w io.Writer, q types.Qualifier) error {
+	sw := &stickyWriter{w: w}
+	e.writeDetail(sw, shortTypeFormat(q))
+	return sw.err
+}
+
+func (e *Error) writeDetail(sw *stickyWriter, tf typeFormatFunc) {
 	if len(e.children) > 0 {
 		for i, child := range e.children {
 			if i > 0 {
-				sb.WriteString("\n\n")
+				sw.writeString("\n\n")
 			}
-			if err := child.DetailedError(sb, q); err != nil {
-				return err
-			}
+			child.writeDetail(sw, tf)
 		}
-		return nil
+		return
 	}
-	tf := shortTypeFormat(q)
-	sb.WriteString(e.line(tf))
-	var identErr *IdentifierError
-	if errors.As(e.err, &identErr) && identErr.Type != nil {
-		sb.WriteString("\n\n")
-		writeTypeMembers(sb, identErr.Type, tf)
-		return nil
+	sw.writeString(e.line(tf))
+	if identErr, ok := errors.AsType[*IdentifierError](e.err); ok && identErr.Type != nil {
+		sw.writeString("\n\n")
+		writeTypeMembers(sw, identErr.Type, tf)
+		return
 	}
-	var callErr *CallError
-	if errors.As(e.err, &callErr) && callErr.Signature != nil {
-		writeCallDetail(sb, callErr, tf)
+	if callErr, ok := errors.AsType[*CallError](e.err); ok && callErr.Signature != nil {
+		writeCallDetail(sw, callErr, tf)
 	}
-	return nil
+}
+
+// stickyWriter forwards writes to w until one fails, then drops the rest and
+// keeps the first error.
+type stickyWriter struct {
+	w   io.Writer
+	err error
+}
+
+func (sw *stickyWriter) writeString(s string) {
+	if sw.err != nil {
+		return
+	}
+	_, sw.err = io.WriteString(sw.w, s)
+}
+
+func (sw *stickyWriter) writef(format string, args ...any) {
+	if sw.err != nil {
+		return
+	}
+	_, sw.err = fmt.Fprintf(sw.w, format, args...)
 }
 
 // shortTypeFormat renders types qualified with q, eliding unnamed composite
@@ -146,38 +167,38 @@ func shortSignature(sig *types.Signature, short typeFormatFunc) string {
 // type, aligned) in declaration order and then its exported method
 // signatures, one per line. A type with no exported members gets
 // "T has no exported fields or methods".
-func writeTypeMembers(sb *strings.Builder, tp types.Type, tf typeFormatFunc) {
-	sb.WriteString(tf(tp))
+func writeTypeMembers(sw *stickyWriter, tp types.Type, tf typeFormatFunc) {
+	sw.writeString(tf(tp))
 	fields, methods := typeMembers(tp, tf)
 	if len(fields) == 0 && len(methods) == 0 {
-		sb.WriteString(" has no exported fields or methods")
+		sw.writeString(" has no exported fields or methods")
 		return
 	}
-	sb.WriteString(" has:")
+	sw.writeString(" has:")
 	width := 0
 	for _, f := range fields {
 		width = max(width, len(f.name))
 	}
 	for _, f := range fields {
-		_, _ = fmt.Fprintf(sb, "\n  %-*s %s", width, f.name, f.detail)
+		sw.writef("\n  %-*s %s", width, f.name, f.detail)
 	}
 	for _, m := range methods {
-		_, _ = fmt.Fprintf(sb, "\n  %s%s", m.name, m.detail)
+		sw.writef("\n  %s%s", m.name, m.detail)
 	}
 }
 
-func writeCallDetail(sb *strings.Builder, callErr *CallError, tf typeFormatFunc) {
-	sb.WriteString("\n\n  signature: ")
+func writeCallDetail(sw *stickyWriter, callErr *CallError, tf typeFormatFunc) {
+	sw.writeString("\n\n  signature: ")
 	if callErr.Name != "" {
-		sb.WriteString(callErr.Name)
+		sw.writeString(callErr.Name)
 	} else {
-		sb.WriteString("func")
+		sw.writeString("func")
 	}
-	sb.WriteString(strings.TrimPrefix(tf(callErr.Signature), "func"))
+	sw.writeString(strings.TrimPrefix(tf(callErr.Signature), "func"))
 	if len(callErr.ArgTypes) > 0 {
-		sb.WriteString("\n  arguments:")
+		sw.writeString("\n  arguments:")
 		for i, at := range callErr.ArgTypes {
-			_, _ = fmt.Fprintf(sb, "\n    [%d] %s", i, tf(at))
+			sw.writef("\n    [%d] %s", i, tf(at))
 		}
 	}
 }
@@ -229,7 +250,9 @@ func collectFieldMembers(st *types.Struct, tf typeFormatFunc, seen map[string]bo
 			continue
 		}
 		if f.Embedded() {
-			if inner, ok := f.Type().Underlying().(*types.Struct); ok {
+			// Dereference so fields promoted through an embedded *T are
+			// listed too.
+			if inner, ok := dereference(f.Type()).Underlying().(*types.Struct); ok {
 				collectFieldMembers(inner, tf, seen, fields)
 			}
 			continue
