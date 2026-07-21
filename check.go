@@ -111,10 +111,10 @@ type Error struct {
 
 	err error
 
-	// render re-renders the cause message with a caller-chosen qualifier.
-	// It is set when the message embeds type names; nil means the message
-	// has no types to re-qualify.
-	render func(types.Qualifier) string
+	// render re-renders the cause message with a caller-chosen type
+	// formatter. It is set when the message embeds type names; nil means
+	// the message has no types to re-render.
+	render func(typeFormatFunc) string
 
 	// children holds the child errors when this error aggregates several
 	// independent failures found while walking the same subtree.
@@ -136,7 +136,7 @@ func errorf(errType ErrorType, message string, args ...any) *Error {
 	render := renderer(message, args...)
 	return &Error{
 		Type:   errType,
-		err:    errors.New(render(nil)),
+		err:    errors.New(render(fullTypeFormat(nil))),
 		render: render,
 	}
 }
@@ -187,13 +187,24 @@ func (e *Error) Error() string {
 		}
 		return strings.Join(messages, "\n")
 	}
-	return e.line(nil)
+	return e.line(fullTypeFormat(nil))
 }
 
-// line renders the single-line message for a leaf error, qualifying type
-// names with q (nil prints full package paths).
-func (e *Error) line(q types.Qualifier) string {
-	message := e.messageWith(q)
+// typeFormatFunc renders a types.Type to a string. Error uses
+// fullTypeFormat(nil); DetailedError uses a qualifying, eliding formatter.
+type typeFormatFunc func(types.Type) string
+
+// fullTypeFormat renders complete type strings qualified with q.
+func fullTypeFormat(q types.Qualifier) typeFormatFunc {
+	return func(tp types.Type) string {
+		return formatType(tp, q)
+	}
+}
+
+// line renders the single-line message for a leaf error, rendering type
+// names with tf.
+func (e *Error) line(tf typeFormatFunc) string {
+	message := e.messageWith(tf)
 	if e.Tree == nil || e.Node == nil {
 		return message
 	}
@@ -201,29 +212,29 @@ func (e *Error) line(q types.Qualifier) string {
 	return fmt.Sprintf("%s: executing %q at <%s>: %s", loc, e.Tree.Name, ctx, message)
 }
 
-// messageWith renders the cause message, qualifying type names with q when
-// the error (or its cause) recorded how to re-render its message.
-func (e *Error) messageWith(q types.Qualifier) string {
+// messageWith renders the cause message through tf when the error (or its
+// cause) recorded how to re-render its message.
+func (e *Error) messageWith(tf typeFormatFunc) string {
 	if e.render != nil {
-		return e.render(q)
+		return e.render(tf)
 	}
 	var identErr *IdentifierError
 	if errors.As(e.err, &identErr) && identErr.render != nil {
-		return identErr.render(q)
+		return identErr.render(tf)
 	}
 	var callErr *CallError
 	if errors.As(e.err, &callErr) && callErr.render != nil {
-		return callErr.render(q)
+		return callErr.render(tf)
 	}
 	return e.err.Error()
 }
 
-// renderFormat is fmt.Sprintf with types.Type args rendered through q.
-func renderFormat(q types.Qualifier, format string, args ...any) string {
+// renderFormat is fmt.Sprintf with types.Type args rendered through tf.
+func renderFormat(tf typeFormatFunc, format string, args ...any) string {
 	rendered := make([]any, len(args))
 	for i, arg := range args {
 		if tp, ok := arg.(types.Type); ok {
-			rendered[i] = formatType(tp, q)
+			rendered[i] = tf(tp)
 			continue
 		}
 		rendered[i] = arg
@@ -231,10 +242,11 @@ func renderFormat(q types.Qualifier, format string, args ...any) string {
 	return fmt.Sprintf(format, rendered...)
 }
 
-// renderer captures format and args for re-rendering with any qualifier.
-func renderer(format string, args ...any) func(types.Qualifier) string {
-	return func(q types.Qualifier) string {
-		return renderFormat(q, format, args...)
+// renderer captures format and args for re-rendering with any type
+// formatter.
+func renderer(format string, args ...any) func(typeFormatFunc) string {
+	return func(tf typeFormatFunc) string {
+		return renderFormat(tf, format, args...)
 	}
 }
 
@@ -366,13 +378,13 @@ func (g *Global) TypeString(typ types.Type) string {
 // notFoundMessage returns a renderer for the compact single-line not-found
 // message. The exported members of tp are not listed here; DetailedError
 // renders them.
-func notFoundMessage(ident string, tp types.Type, fset *token.FileSet) func(types.Qualifier) string {
-	return func(q types.Qualifier) string {
+func notFoundMessage(ident string, tp types.Type, fset *token.FileSet) func(typeFormatFunc) string {
+	return func(tf typeFormatFunc) string {
 		var b strings.Builder
 		b.WriteString("field or method ")
 		b.WriteString(ident)
 		b.WriteString(" not found on ")
-		b.WriteString(formatType(tp, q))
+		b.WriteString(tf(tp))
 		if named, ok := tp.(*types.Named); ok {
 			pos := fset.Position(named.Obj().Pos())
 			if pos.IsValid() {
@@ -766,7 +778,7 @@ func (s *scope) identErr(errType ErrorType, tree *parse.Tree, n parse.Node, iden
 	return wrapError(errType, tree, n, &IdentifierError{
 		Identifier: ident,
 		Type:       tp,
-		Cause:      errors.New(render(nil)),
+		Cause:      errors.New(render(fullTypeFormat(nil))),
 		render:     render,
 		qualifier:  s.global.Qualifier,
 		fset:       s.global.fileSet,
@@ -809,7 +821,7 @@ func (s *scope) checkIdentifiers(tree *parse.Tree, dot types.Type, n parse.Node,
 				return nil, wrapError(ErrorTypeFieldOrMethodNotFound, tree, n, &IdentifierError{
 					Identifier: ident,
 					Type:       x,
-					Cause:      errors.New(render(nil)),
+					Cause:      errors.New(render(fullTypeFormat(nil))),
 					render:     render,
 					qualifier:  s.global.Qualifier,
 					fset:       s.global.fileSet,

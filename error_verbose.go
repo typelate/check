@@ -38,7 +38,7 @@ type CallError struct {
 	Cause error
 
 	// render re-renders the Cause message with a caller-chosen qualifier.
-	render func(types.Qualifier) string
+	render func(typeFormatFunc) string
 
 	qualifier types.Qualifier
 }
@@ -95,7 +95,7 @@ type IdentifierError struct {
 	Cause error
 
 	// render re-renders the Cause message with a caller-chosen qualifier.
-	render func(types.Qualifier) string
+	render func(typeFormatFunc) string
 
 	qualifier types.Qualifier
 	fset      *token.FileSet

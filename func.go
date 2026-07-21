@@ -75,7 +75,7 @@ func checkCallArguments(global *Global, name string, fn *types.Signature, args [
 			Name:      name,
 			Signature: fn,
 			ArgTypes:  args,
-			Cause:     errors.New(render(nil)),
+			Cause:     errors.New(render(fullTypeFormat(nil))),
 			render:    render,
 			qualifier: global.Qualifier,
 		}).withX(fn)

@@ -1,6 +1,7 @@
 package check_test
 
 import (
+	"fmt"
 	"go/token"
 	"go/types"
 	"strings"
@@ -125,6 +126,55 @@ func TestError_DetailedError(t *testing.T) {
 		detail := sb.String()
 		require.Contains(t, detail, "signature: Visit(count int) string")
 		require.Contains(t, detail, "[0] string")
+	})
+
+	t.Run("massive inline struct types are elided", func(t *testing.T) {
+		bigFields := make([]*types.Var, 8)
+		for i := range bigFields {
+			bigFields[i] = types.NewField(token.NoPos, pkg, fmt.Sprintf("F%d", i), types.Typ[types.String], false)
+		}
+		big := types.NewStruct(bigFields, nil)
+		data := types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "Title", types.Typ[types.String], false),
+			types.NewField(token.NoPos, pkg, "Meta", big, false),
+		}, nil)
+
+		e := execute(t, `{{.Missing}}`, data)
+
+		require.Contains(t, e.Error(), "F0 string",
+			"Error keeps the full inline type")
+		leaf := findLeafError(t, e)
+		require.True(t, types.Identical(data, leaf.X),
+			"X keeps the full type")
+
+		var sb strings.Builder
+		require.NoError(t, e.DetailedError(&sb, webQualifier))
+		detail := sb.String()
+		require.Contains(t, detail, "not found on struct{...}")
+		require.Contains(t, detail, "struct{...} has:")
+		require.Contains(t, detail, "\n  Meta  struct{...}")
+		require.NotContains(t, detail, "F0 string",
+			"nested fields of an elided struct should not leak into the listing")
+	})
+
+	t.Run("method signatures elide massive inline struct parameters", func(t *testing.T) {
+		bigFields := make([]*types.Var, 8)
+		for i := range bigFields {
+			bigFields[i] = types.NewField(token.NoPos, pkg, fmt.Sprintf("F%d", i), types.Typ[types.String], false)
+		}
+		big := types.NewStruct(bigFields, nil)
+		owner := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Widget", nil), types.NewStruct(nil, nil), nil)
+		configureSig := types.NewSignatureType(types.NewVar(token.NoPos, pkg, "", owner), nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "opts", big)),
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+			false)
+		owner.AddMethod(types.NewFunc(token.NoPos, pkg, "Configure", configureSig))
+
+		e := execute(t, `{{.Missing}}`, owner)
+
+		var sb strings.Builder
+		require.NoError(t, e.DetailedError(&sb, webQualifier))
+		require.Contains(t, sb.String(), "\n  Configure(struct{...}) string")
 	})
 
 	t.Run("aggregates render one block per failure", func(t *testing.T) {
