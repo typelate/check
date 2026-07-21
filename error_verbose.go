@@ -37,6 +37,9 @@ type CallError struct {
 	// Cause is the short, single-line message returned by Error.
 	Cause error
 
+	// render re-renders the Cause message with a caller-chosen qualifier.
+	render func(types.Qualifier) string
+
 	qualifier types.Qualifier
 }
 
@@ -91,11 +94,8 @@ type IdentifierError struct {
 	// Cause is the short, single-line message returned by Error.
 	Cause error
 
-	// bareCause, when non-empty, replaces Cause.Error() in the verbose
-	// rendering. It is used by the not-found path to omit the
-	// "; available: ..." clause from the verbose output, since the
-	// rendered source declaration already enumerates available members.
-	bareCause string
+	// render re-renders the Cause message with a caller-chosen qualifier.
+	render func(types.Qualifier) string
 
 	qualifier types.Qualifier
 	fset      *token.FileSet
@@ -120,9 +120,6 @@ func (e *IdentifierError) VerboseError() string {
 		return ""
 	}
 	short := e.Error()
-	if e.bareCause != "" {
-		short = e.bareCause
-	}
 
 	var b strings.Builder
 	b.WriteString(short)

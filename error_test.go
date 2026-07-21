@@ -13,6 +13,132 @@ import (
 	"github.com/typelate/check"
 )
 
+func TestError_DetailedError(t *testing.T) {
+	pkg := types.NewPackage("example.com/web", "web")
+
+	userNamed := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "User", nil),
+		types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "Name", types.Typ[types.String], false),
+		}, nil), nil)
+
+	pageNamed := types.NewNamed(
+		types.NewTypeName(token.NoPos, pkg, "Page", nil),
+		types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "Title", types.Typ[types.String], false),
+			types.NewField(token.NoPos, pkg, "Owner", userNamed, false),
+		}, nil), nil)
+	visitSig := types.NewSignatureType(types.NewVar(token.NoPos, pkg, "", pageNamed), nil, nil,
+		types.NewTuple(types.NewVar(token.NoPos, pkg, "count", types.Typ[types.Int])),
+		types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+		false)
+	pageNamed.AddMethod(types.NewFunc(token.NoPos, pkg, "Visit", visitSig))
+	setOwnerSig := types.NewSignatureType(types.NewVar(token.NoPos, pkg, "", pageNamed), nil, nil,
+		types.NewTuple(types.NewVar(token.NoPos, pkg, "owner", userNamed)),
+		types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])),
+		false)
+	pageNamed.AddMethod(types.NewFunc(token.NoPos, pkg, "SetOwner", setOwnerSig))
+
+	webQualifier := func(p *types.Package) string { return p.Name() }
+
+	execute := func(t *testing.T, text string, data types.Type) *check.Error {
+		t.Helper()
+		tmpl, err := template.New("detail.gohtml").Parse(text)
+		require.NoError(t, err)
+		global := check.NewGlobal(pkg, token.NewFileSet(), findTextTemplateTree(tmpl), check.Functions{})
+		checkErr := check.Execute(global, tmpl.Tree, data)
+		require.Error(t, checkErr)
+		var e *check.Error
+		require.ErrorAs(t, checkErr, &e)
+		return e
+	}
+
+	t.Run("Error stays a compact single line", func(t *testing.T) {
+		e := execute(t, `{{.Missing}}`, pageNamed)
+		message := e.Error()
+		require.Contains(t, message, "field or method Missing not found on example.com/web.Page")
+		require.NotContains(t, message, "available")
+		require.NotContains(t, message, "\n")
+	})
+
+	t.Run("lists fields and method signatures one per line", func(t *testing.T) {
+		e := execute(t, `{{.Missing}}`, pageNamed)
+
+		var sb strings.Builder
+		require.NoError(t, e.DetailedError(&sb, webQualifier))
+		detail := sb.String()
+
+		require.Contains(t, detail, "field or method Missing not found on")
+		require.Contains(t, detail, "web.Page has:")
+		require.Contains(t, detail, "\n  Title string")
+		require.Contains(t, detail, "\n  Owner web.User")
+		require.Contains(t, detail, "\n  Visit(count int) string")
+	})
+
+	t.Run("every line uses the passed qualifier", func(t *testing.T) {
+		e := execute(t, `{{.Missing}}`, pageNamed)
+
+		var sb strings.Builder
+		require.NoError(t, e.DetailedError(&sb, webQualifier))
+		detail := sb.String()
+
+		require.Contains(t, detail, `detail.gohtml:1:2: executing "detail.gohtml" at <.Missing>: field or method Missing not found on web.Page`,
+			"the message line should qualify types with the passed qualifier")
+		require.NotContains(t, detail, "example.com/web",
+			"no line should fall back to the construction-time qualifier")
+	})
+
+	t.Run("call argument message lines use the passed qualifier", func(t *testing.T) {
+		e := execute(t, `{{.SetOwner "x"}}`, pageNamed)
+
+		var sb strings.Builder
+		require.NoError(t, e.DetailedError(&sb, webQualifier))
+		detail := sb.String()
+
+		require.Contains(t, detail, "argument 0 has type string expected web.User")
+		require.Contains(t, detail, "signature: SetOwner(owner web.User) string")
+		require.NotContains(t, detail, "example.com/web")
+	})
+
+	t.Run("nil qualifier prints full package paths", func(t *testing.T) {
+		e := execute(t, `{{.Missing}}`, pageNamed)
+
+		var sb strings.Builder
+		require.NoError(t, e.DetailedError(&sb, nil))
+		require.Contains(t, sb.String(), "example.com/web.Page has:")
+		require.Contains(t, sb.String(), "Owner example.com/web.User")
+	})
+
+	t.Run("a memberless type says so", func(t *testing.T) {
+		e := execute(t, `{{.Missing}}`, types.NewStruct(nil, nil))
+
+		var sb strings.Builder
+		require.NoError(t, e.DetailedError(&sb, webQualifier))
+		require.Contains(t, sb.String(), "struct{} has no exported fields or methods")
+	})
+
+	t.Run("call errors include the qualified signature and arguments", func(t *testing.T) {
+		e := execute(t, `{{.Visit "x"}}`, pageNamed)
+
+		var sb strings.Builder
+		require.NoError(t, e.DetailedError(&sb, webQualifier))
+		detail := sb.String()
+		require.Contains(t, detail, "signature: Visit(count int) string")
+		require.Contains(t, detail, "[0] string")
+	})
+
+	t.Run("aggregates render one block per failure", func(t *testing.T) {
+		e := execute(t, `{{.A}}{{.B}}`, pageNamed)
+
+		var sb strings.Builder
+		require.NoError(t, e.DetailedError(&sb, webQualifier))
+		blocks := strings.Split(sb.String(), "\n\n")
+		require.GreaterOrEqual(t, len(blocks), 2)
+		require.Contains(t, sb.String(), "field or method A not found")
+		require.Contains(t, sb.String(), "field or method B not found")
+	})
+}
+
 func TestExecute_error_classification(t *testing.T) {
 	pkg := types.NewPackage("example.com/app", "app")
 	emptyStruct := types.NewStruct(nil, nil)

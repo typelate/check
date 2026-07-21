@@ -94,7 +94,8 @@ func TestTree(t *testing.T) {
 			Data:     Void{},
 			Error: func(t *testing.T, err, _ error, tp types.Type) {
 				require.ErrorContains(t, err, "Field not found on")
-				require.ErrorContains(t, err, "no exported fields or methods")
+				require.NotContains(t, err.Error(), "no exported fields or methods")
+				require.Contains(t, detailedError(t, err), "no exported fields or methods")
 			},
 		},
 		{
@@ -103,7 +104,7 @@ func TestTree(t *testing.T) {
 			Data:     StructWithField{},
 			Error: func(t *testing.T, err, _ error, tp types.Type) {
 				require.ErrorContains(t, err, "Missing not found on")
-				require.ErrorContains(t, err, "Field struct{}")
+				require.Contains(t, detailedError(t, err), "Field struct{}")
 			},
 		},
 		{
@@ -112,7 +113,7 @@ func TestTree(t *testing.T) {
 			Data:     TypeWithMethodSignatureResult{},
 			Error: func(t *testing.T, err, _ error, tp types.Type) {
 				require.ErrorContains(t, err, "Missing not found on")
-				require.ErrorContains(t, err, "Method() struct{}")
+				require.Contains(t, detailedError(t, err), "Method() struct{}")
 			},
 		},
 		{
@@ -766,7 +767,7 @@ func TestTree(t *testing.T) {
 			Error: func(t *testing.T, checkErr, execErr error, tp types.Type) {
 				assert.NoError(t, execErr)
 				require.ErrorContains(t, checkErr, `template:1:8: executing "template" at <.Unknown>: field or method Unknown not found on untyped nil`)
-				require.ErrorContains(t, checkErr, "no exported fields or methods")
+				require.Contains(t, detailedError(t, checkErr), "no exported fields or methods")
 			},
 		},
 		{
@@ -776,7 +777,7 @@ func TestTree(t *testing.T) {
 			Error: func(t *testing.T, checkErr, execErr error, tp types.Type) {
 				assert.NoError(t, execErr)
 				require.ErrorContains(t, checkErr, `template:1:7: executing "template" at <.Unknown>: field or method Unknown not found on untyped nil`)
-				require.ErrorContains(t, checkErr, "no exported fields or methods")
+				require.Contains(t, detailedError(t, checkErr), "no exported fields or methods")
 			},
 		},
 		{
@@ -893,6 +894,16 @@ func find[T any](t *testing.T, list []T, match func(p T) bool) T {
 		t.Fatalf("failed to find")
 		return zero
 	}
+}
+
+// detailedError renders err's DetailedError output with full package paths.
+func detailedError(t *testing.T, err error) string {
+	t.Helper()
+	var checkErr *check.Error
+	require.ErrorAs(t, err, &checkErr)
+	var sb strings.Builder
+	require.NoError(t, checkErr.DetailedError(&sb, nil))
+	return sb.String()
 }
 
 func convertTextExecError(t *testing.T, err error) string {

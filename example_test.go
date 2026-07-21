@@ -102,6 +102,6 @@ func ExampleExecute() {
 			fmt.Printf("template %q type-check passed\n", templateName)
 		}
 	}
-	// Output: example:3:3: executing "unknown field" at <.UnknownField>: field or method UnknownField not found on github.com/typelate/check_test.Person; available: Name string
+	// Output: example:3:3: executing "unknown field" at <.UnknownField>: field or method UnknownField not found on github.com/typelate/check_test.Person
 	// template "known field" type-check passed
 }

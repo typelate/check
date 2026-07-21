@@ -1,7 +1,7 @@
 package check
 
 import (
-	"fmt"
+	"errors"
 	"go/types"
 	"maps"
 	"text/template/parse"
@@ -70,11 +70,13 @@ func (functions Functions) CheckCall(global *Global, funcIdent string, argNodes 
 
 func checkCallArguments(global *Global, name string, fn *types.Signature, args []types.Type) (types.Type, error) {
 	callErr := func(format string, a ...any) *Error {
+		render := renderer(format, a...)
 		return wrapError(ErrorTypeCallArguments, nil, nil, &CallError{
 			Name:      name,
 			Signature: fn,
 			ArgTypes:  args,
-			Cause:     fmt.Errorf(format, a...),
+			Cause:     errors.New(render(nil)),
+			render:    render,
 			qualifier: global.Qualifier,
 		}).withX(fn)
 	}
@@ -122,7 +124,7 @@ func checkArgAssignable(global *Global, callErr func(format string, a ...any) *E
 	if ptr, ok := pt.Underlying().(*types.Pointer); ok && types.AssignableTo(at, ptr.Elem()) {
 		return nil
 	}
-	return callErr("argument %d has type %s expected %s", i, global.TypeString(at), global.TypeString(pt))
+	return callErr("argument %d has type %s expected %s", i, at, pt)
 }
 
 func findPackage(pkg *types.Package, path string) (*types.Package, bool) {
@@ -150,10 +152,10 @@ func builtInCheck(global *Global, funcIdent string, nodes []parse.Node, argTypes
 		}
 		switch x := argTypes[0].Underlying().(type) {
 		default:
-			return nil, errorf(ErrorTypeCallArguments, "built-in len expects the first argument to be an array, slice, map, or string got %s", global.TypeString(x)).withX(x)
+			return nil, errorf(ErrorTypeCallArguments, "built-in len expects the first argument to be an array, slice, map, or string got %s", x).withX(x)
 		case *types.Basic:
 			if x.Kind() != types.String {
-				return nil, errorf(ErrorTypeCallArguments, "built-in len expects the first argument to be an array, slice, map, or string got %s", global.TypeString(x)).withX(x)
+				return nil, errorf(ErrorTypeCallArguments, "built-in len expects the first argument to be an array, slice, map, or string got %s", x).withX(x)
 			}
 		case *types.Array:
 		case *types.Slice:
@@ -171,10 +173,10 @@ func builtInCheck(global *Global, funcIdent string, nodes []parse.Node, argTypes
 		}
 		switch x := argTypes[0].Underlying().(type) {
 		default:
-			return nil, errorf(ErrorTypeCallArguments, "built-in slice expects the first argument to be an array, slice, or string got %s", global.TypeString(x)).withX(x)
+			return nil, errorf(ErrorTypeCallArguments, "built-in slice expects the first argument to be an array, slice, or string got %s", x).withX(x)
 		case *types.Basic:
 			if x.Kind() != types.String {
-				return nil, errorf(ErrorTypeCallArguments, "built-in slice expects the first argument to be an array, slice, or string got %s", global.TypeString(x)).withX(x)
+				return nil, errorf(ErrorTypeCallArguments, "built-in slice expects the first argument to be an array, slice, or string got %s", x).withX(x)
 			}
 			if len(nodes) == 4 {
 				return nil, errorf(ErrorTypeCallArguments, "can not 3 index slice a string")
@@ -226,21 +228,21 @@ func builtInCheck(global *Global, funcIdent string, nodes []parse.Node, argTypes
 			switch x := result.(type) {
 			case *types.Slice:
 				if !types.AssignableTo(at, types.Typ[types.Int]) {
-					return nil, errorf(ErrorTypeCallArguments, "slice index expects int got %s", global.TypeString(at)).withX(at)
+					return nil, errorf(ErrorTypeCallArguments, "slice index expects int got %s", at).withX(at)
 				}
 				result = x.Elem()
 			case *types.Array:
 				if !types.AssignableTo(at, types.Typ[types.Int]) {
-					return nil, errorf(ErrorTypeCallArguments, "slice index expects int got %s", global.TypeString(at)).withX(at)
+					return nil, errorf(ErrorTypeCallArguments, "slice index expects int got %s", at).withX(at)
 				}
 				result = x.Elem()
 			case *types.Map:
 				if !types.AssignableTo(at, x.Key()) {
-					return nil, errorf(ErrorTypeCallArguments, "slice index expects %s got %s", global.TypeString(x.Key()), global.TypeString(at)).withX(at)
+					return nil, errorf(ErrorTypeCallArguments, "slice index expects %s got %s", x.Key(), at).withX(at)
 				}
 				result = x.Elem()
 			default:
-				return nil, errorf(ErrorTypeCallArguments, "can not index over %s", global.TypeString(result)).withX(result)
+				return nil, errorf(ErrorTypeCallArguments, "can not index over %s", result).withX(result)
 			}
 		}
 		return result, nil

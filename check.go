@@ -7,7 +7,6 @@ import (
 	"go/token"
 	"go/types"
 	"maps"
-	"slices"
 	"strconv"
 	"strings"
 	"text/template/parse"
@@ -112,6 +111,11 @@ type Error struct {
 
 	err error
 
+	// render re-renders the cause message with a caller-chosen qualifier.
+	// It is set when the message embeds type names; nil means the message
+	// has no types to re-qualify.
+	render func(types.Qualifier) string
+
 	// children holds the child errors when this error aggregates several
 	// independent failures found while walking the same subtree.
 	children []*Error
@@ -125,11 +129,15 @@ func newError(errType ErrorType, tree *parse.Tree, node parse.Node, message stri
 }
 
 // errorf builds a located-later *Error: the walk site that receives it fills
-// in Tree and Node via wrapError.
+// in Tree and Node via wrapError. types.Type args are rendered with a nil
+// qualifier (full package paths) in the Error message and re-rendered with
+// the caller's qualifier by DetailedError.
 func errorf(errType ErrorType, message string, args ...any) *Error {
+	render := renderer(message, args...)
 	return &Error{
-		Type: errType,
-		err:  fmt.Errorf(message, args...),
+		Type:   errType,
+		err:    errors.New(render(nil)),
+		render: render,
 	}
 }
 
@@ -179,11 +187,55 @@ func (e *Error) Error() string {
 		}
 		return strings.Join(messages, "\n")
 	}
+	return e.line(nil)
+}
+
+// line renders the single-line message for a leaf error, qualifying type
+// names with q (nil prints full package paths).
+func (e *Error) line(q types.Qualifier) string {
+	message := e.messageWith(q)
 	if e.Tree == nil || e.Node == nil {
-		return e.err.Error()
+		return message
 	}
 	loc, ctx := e.Tree.ErrorContext(e.Node)
-	return fmt.Sprintf("%s: executing %q at <%s>: %s", loc, e.Tree.Name, ctx, e.err.Error())
+	return fmt.Sprintf("%s: executing %q at <%s>: %s", loc, e.Tree.Name, ctx, message)
+}
+
+// messageWith renders the cause message, qualifying type names with q when
+// the error (or its cause) recorded how to re-render its message.
+func (e *Error) messageWith(q types.Qualifier) string {
+	if e.render != nil {
+		return e.render(q)
+	}
+	var identErr *IdentifierError
+	if errors.As(e.err, &identErr) && identErr.render != nil {
+		return identErr.render(q)
+	}
+	var callErr *CallError
+	if errors.As(e.err, &callErr) && callErr.render != nil {
+		return callErr.render(q)
+	}
+	return e.err.Error()
+}
+
+// renderFormat is fmt.Sprintf with types.Type args rendered through q.
+func renderFormat(q types.Qualifier, format string, args ...any) string {
+	rendered := make([]any, len(args))
+	for i, arg := range args {
+		if tp, ok := arg.(types.Type); ok {
+			rendered[i] = formatType(tp, q)
+			continue
+		}
+		rendered[i] = arg
+	}
+	return fmt.Sprintf(format, rendered...)
+}
+
+// renderer captures format and args for re-rendering with any qualifier.
+func renderer(format string, args ...any) func(types.Qualifier) string {
+	return func(q types.Qualifier) string {
+		return renderFormat(q, format, args...)
+	}
 }
 
 // Unwrap exposes the underlying errors: the wrapped cause for a leaf error,
@@ -311,88 +363,23 @@ func (g *Global) TypeString(typ types.Type) string {
 	return buf.String()
 }
 
-// formatNotFoundParts returns both forms of the not-found message: bare
-// (without the trailing "; available: ..." or "; no exported fields..." clause)
-// and full (with that clause). Verbose error rendering uses the bare form
-// because it follows up with a source declaration of the receiver type.
-func (g *Global) formatNotFoundParts(ident string, tp types.Type) (bare, full string) {
-	var b strings.Builder
-	b.WriteString("field or method ")
-	b.WriteString(ident)
-	b.WriteString(" not found on ")
-	b.WriteString(g.TypeString(tp))
-	if named, ok := tp.(*types.Named); ok {
-		pos := g.fileSet.Position(named.Obj().Pos())
-		if pos.IsValid() {
-			fmt.Fprintf(&b, " (declared at %s)", pos)
-		}
-	}
-	bare = b.String()
-
-	members := g.collectMembers(tp)
-	if len(members) == 0 {
-		full = bare + "; no exported fields or methods"
-	} else {
-		full = bare + "; available: " + strings.Join(members, ", ")
-	}
-	return bare, full
-}
-
-func (g *Global) collectMembers(tp types.Type) []string {
-	var members []string
-	seen := make(map[string]bool)
-
-	// Collect methods via method set.
-	// For interfaces, use the type directly (pointer-to-interface has empty method set).
-	// For concrete types, use pointer to pick up pointer receiver methods.
-	var mset *types.MethodSet
-	if types.IsInterface(tp) {
-		mset = types.NewMethodSet(tp)
-	} else {
-		mset = types.NewMethodSet(types.NewPointer(tp))
-	}
-	for i := range mset.Len() {
-		obj := mset.At(i).Obj()
-		name := obj.Name()
-		if !token.IsExported(name) {
-			continue
-		}
-		if seen[name] {
-			continue
-		}
-		seen[name] = true
-		sigStr := g.TypeString(obj.Type())
-		// sigStr looks like "func(...) ..." — trim the "func" prefix to get "(...) ..."
-		sigStr = strings.TrimPrefix(sigStr, "func")
-		members = append(members, name+sigStr)
-	}
-
-	// Collect struct fields (including promoted fields from embedded structs).
-	if st, ok := tp.Underlying().(*types.Struct); ok {
-		g.collectStructFields(st, seen, &members)
-	}
-
-	slices.Sort(members)
-	return members
-}
-
-func (g *Global) collectStructFields(st *types.Struct, seen map[string]bool, members *[]string) {
-	for i := range st.NumFields() {
-		f := st.Field(i)
-		if !f.Exported() {
-			continue
-		}
-		if f.Embedded() {
-			if inner, ok := f.Type().Underlying().(*types.Struct); ok {
-				g.collectStructFields(inner, seen, members)
+// notFoundMessage returns a renderer for the compact single-line not-found
+// message. The exported members of tp are not listed here; DetailedError
+// renders them.
+func notFoundMessage(ident string, tp types.Type, fset *token.FileSet) func(types.Qualifier) string {
+	return func(q types.Qualifier) string {
+		var b strings.Builder
+		b.WriteString("field or method ")
+		b.WriteString(ident)
+		b.WriteString(" not found on ")
+		b.WriteString(formatType(tp, q))
+		if named, ok := tp.(*types.Named); ok {
+			pos := fset.Position(named.Obj().Pos())
+			if pos.IsValid() {
+				fmt.Fprintf(&b, " (declared at %s)", pos)
 			}
-			continue
 		}
-		if seen[f.Name()] {
-			continue
-		}
-		seen[f.Name()] = true
-		*members = append(*members, f.Name()+" "+g.TypeString(f.Type()))
+		return b.String()
 	}
 }
 
@@ -772,11 +759,15 @@ func (s *scope) notAFunction(tree *parse.Tree, node parse.Node, args []parse.Nod
 // identErr builds an *Error wrapping an *IdentifierError. The location
 // prefix is added by *Error at format time; the IdentifierError carries
 // the full type so callers of FormatVerbose can render its structure.
+// types.Type args are rendered with a nil qualifier in the Cause message
+// and re-rendered with the caller's qualifier by DetailedError.
 func (s *scope) identErr(errType ErrorType, tree *parse.Tree, n parse.Node, ident string, tp types.Type, format string, a ...any) *Error {
+	render := renderer(format, a...)
 	return wrapError(errType, tree, n, &IdentifierError{
 		Identifier: ident,
 		Type:       tp,
-		Cause:      fmt.Errorf(format, a...),
+		Cause:      errors.New(render(nil)),
+		render:     render,
 		qualifier:  s.global.Qualifier,
 		fset:       s.global.fileSet,
 	}).withX(tp)
@@ -797,7 +788,7 @@ func (s *scope) checkIdentifiers(tree *parse.Tree, dot types.Type, n parse.Node,
 					x = xx.Elem()
 					_, err := strconv.Atoi(ident)
 					if err != nil {
-						return nil, s.identErr(ErrorTypeMapKey, tree, n, ident, xx, `can't evaluate field one in type %s`, s.global.TypeString(xx))
+						return nil, s.identErr(ErrorTypeMapKey, tree, n, ident, xx, `can't evaluate field one in type %s`, xx)
 					}
 				case types.String:
 					x = xx.Elem()
@@ -814,12 +805,12 @@ func (s *scope) checkIdentifiers(tree *parse.Tree, dot types.Type, n parse.Node,
 			}
 			obj, _, _ := types.LookupFieldOrMethod(x, true, s.global.pkg, ident)
 			if obj == nil {
-				bare, full := s.global.formatNotFoundParts(ident, x)
+				render := notFoundMessage(ident, x, s.global.fileSet)
 				return nil, wrapError(ErrorTypeFieldOrMethodNotFound, tree, n, &IdentifierError{
 					Identifier: ident,
 					Type:       x,
-					Cause:      errors.New(full),
-					bareCause:  bare,
+					Cause:      errors.New(render(nil)),
+					render:     render,
 					qualifier:  s.global.Qualifier,
 					fset:       s.global.fileSet,
 				}).withX(x)
@@ -839,7 +830,7 @@ func (s *scope) checkIdentifiers(tree *parse.Tree, dot types.Type, n parse.Node,
 					finalResult := sig.Results().At(sig.Results().Len() - 1)
 					errorType := types.Universe.Lookup("error")
 					if !types.Identical(errorType.Type(), finalResult.Type()) {
-						return nil, s.identErr(ErrorTypeBadSignature, tree, n, ident, sig, "invalid function signature for %s: second return value should be error; is %s: incorrect signature at %s", ident, s.global.TypeString(finalResult.Type()), methodPos)
+						return nil, s.identErr(ErrorTypeBadSignature, tree, n, ident, sig, "invalid function signature for %s: second return value should be error; is %s: incorrect signature at %s", ident, finalResult.Type(), methodPos)
 					}
 				}
 				if i == len(idents)-1 {
@@ -852,7 +843,7 @@ func (s *scope) checkIdentifiers(tree *parse.Tree, dot types.Type, n parse.Node,
 				x = sig.Results().At(0).Type()
 			}
 			if _, ok := x.(*types.Signature); ok && i < len(idents)-1 {
-				return nil, s.identErr(ErrorTypeIdentifierChain, tree, n, ident, x, "identifier chain not supported for type %s", s.global.TypeString(x))
+				return nil, s.identErr(ErrorTypeIdentifierChain, tree, n, ident, x, "identifier chain not supported for type %s", x)
 			}
 		}
 	}
@@ -945,10 +936,10 @@ func (s *scope) checkRangeNode(tree *parse.Tree, dot types.Type, n *parse.RangeN
 				return newError(ErrorTypeRange, tree, n.Pipe, "iter.Seq[T] must not iterate over more than one variable").withX(pipeType)
 			}
 		} else {
-			return newError(ErrorTypeRange, tree, n.Pipe, "failed to range over function %s", s.global.TypeString(pipeType)).withX(pipeType)
+			return newError(ErrorTypeRange, tree, n.Pipe, "failed to range over function %s", pipeType).withX(pipeType)
 		}
 	default:
-		return newError(ErrorTypeRange, tree, n.Pipe, "failed to range over %s", s.global.TypeString(pipeType)).withX(pipeType)
+		return newError(ErrorTypeRange, tree, n.Pipe, "failed to range over %s", pipeType).withX(pipeType)
 	}
 	var errs []error
 	if _, err := child.walk(tree, x, nil, n.List); err != nil {
