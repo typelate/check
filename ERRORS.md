@@ -43,7 +43,7 @@ suppress or de-emphasize them.
 | `Tree` | `*parse.Tree` | the template tree the failure was found in |
 | `Node` | `parse.Node` | the exact offending node |
 | `X` | `types.Type` | the most relevant Go type: the receiver for field/method lookups, the pipeline result for `range`, the callee signature for call errors; may be nil |
-| `Decl` | `token.Position` | where the involved Go declaration is defined: the receiver type for lookups, the method for signature failures; zero when unknown. Suited for LSP `RelatedInformation` (the same position also appears textually in the message as `(declared at …)`) |
+| `Decl` | `token.Position` | where the involved Go declaration is defined: the receiver type for lookups, the method for signature failures; zero when unknown. This field is the **only** place the declaration position lives — `Error()` messages are deterministic and never embed it — so use it for LSP `RelatedInformation` (URI + range), or append it textually at render time the way `check-templates` does |
 | `Secondary` | `bool` | true for follow-on failures whose root cause is another error in the tree (see the cascade note above) |
 
 Aggregates have `Type == ErrorTypeAggregate`, may carry the enclosing
@@ -113,7 +113,7 @@ type names print with **full package paths** (`types.WriteType` with a nil
 `types.Qualifier`). `Global.Qualifier` does not affect message text.
 
 ```
-page.gohtml:1:2: executing "page.gohtml" at <.Missng>: field or method Missng not found on example.com/web.Page (declared at main.go:23:6)
+page.gohtml:1:2: executing "page.gohtml" at <.Missng>: field or method Missng not found on example.com/web.Page
 ```
 
 An aggregate's `Error()` joins its children's lines with `\n` — one line

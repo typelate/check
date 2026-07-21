@@ -115,6 +115,9 @@ func writeCheckError(stderr io.Writer, err error) {
 			continue
 		}
 		line, detail := splitVerbose(e)
+		if e.Decl.IsValid() {
+			line += fmt.Sprintf(" (declared at %s)", e.Decl)
+		}
 		_, _ = fmt.Fprintln(stderr, line)
 		if detail != "" && !seen[detail] && !redundantDetail(detail) {
 			seen[detail] = true

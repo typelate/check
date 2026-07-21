@@ -394,21 +394,16 @@ func (g *Global) TypeString(typ types.Type) string {
 }
 
 // notFoundMessage returns a renderer for the compact single-line not-found
-// message. The exported members of tp are not listed here; DetailedError
-// renders them.
-func notFoundMessage(ident string, tp types.Type, fset *token.FileSet) func(typeFormatFunc) string {
+// message. The exported members of tp are not listed here (DetailedError
+// renders them), and the declaration position is not embedded (the Error's
+// Decl field carries it), keeping the message deterministic.
+func notFoundMessage(ident string, tp types.Type) func(typeFormatFunc) string {
 	return func(tf typeFormatFunc) string {
 		var b strings.Builder
 		b.WriteString("field or method ")
 		b.WriteString(ident)
 		b.WriteString(" not found on ")
 		b.WriteString(tf(tp))
-		if named, ok := tp.(*types.Named); ok {
-			pos := fset.Position(named.Obj().Pos())
-			if pos.IsValid() {
-				fmt.Fprintf(&b, " (declared at %s)", pos)
-			}
-		}
 		return b.String()
 	}
 }
@@ -858,7 +853,7 @@ func (s *scope) checkIdentifiers(tree *parse.Tree, dot types.Type, n parse.Node,
 			}
 			obj, _, _ := types.LookupFieldOrMethod(x, true, s.global.pkg, ident)
 			if obj == nil {
-				render := notFoundMessage(ident, x, s.global.fileSet)
+				render := notFoundMessage(ident, x)
 				notFound := wrapError(ErrorTypeFieldOrMethodNotFound, tree, n, &IdentifierError{
 					Identifier: ident,
 					Type:       x,
@@ -880,14 +875,14 @@ func (s *scope) checkIdentifiers(tree *parse.Tree, dot types.Type, n parse.Node,
 				resultLen := sig.Results().Len()
 				if resultLen < 1 || resultLen > 2 {
 					methodPos := s.global.fileSet.Position(o.Pos())
-					return nil, s.identErr(ErrorTypeBadSignature, tree, n, ident, sig, "function %s has %d return values; should be 1 or 2: incorrect signature at %s", ident, resultLen, methodPos).withDecl(methodPos)
+					return nil, s.identErr(ErrorTypeBadSignature, tree, n, ident, sig, "function %s has %d return values; should be 1 or 2", ident, resultLen).withDecl(methodPos)
 				}
 				if resultLen > 1 {
 					methodPos := s.global.fileSet.Position(obj.Pos())
 					finalResult := sig.Results().At(sig.Results().Len() - 1)
 					errorType := types.Universe.Lookup("error")
 					if !types.Identical(errorType.Type(), finalResult.Type()) {
-						return nil, s.identErr(ErrorTypeBadSignature, tree, n, ident, sig, "invalid function signature for %s: second return value should be error; is %s: incorrect signature at %s", ident, finalResult.Type(), methodPos).withDecl(methodPos)
+						return nil, s.identErr(ErrorTypeBadSignature, tree, n, ident, sig, "invalid function signature for %s: second return value should be error; is %s", ident, finalResult.Type()).withDecl(methodPos)
 					}
 				}
 				if i == len(idents)-1 {

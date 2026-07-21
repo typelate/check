@@ -161,5 +161,7 @@ func TestFormatVerbose_JoinedErrors(t *testing.T) {
 
 // Confirm CallError and IdentifierError satisfy the VerboseErrorer interface
 // at compile time. (Tests fail to build if they don't.)
-var _ check.VerboseErrorer = (*check.CallError)(nil)
-var _ check.VerboseErrorer = (*check.IdentifierError)(nil)
+var (
+	_ check.VerboseErrorer = (*check.CallError)(nil)
+	_ check.VerboseErrorer = (*check.IdentifierError)(nil)
+)

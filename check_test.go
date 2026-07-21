@@ -130,7 +130,8 @@ func TestTree(t *testing.T) {
 				require.NotNil(t, method)
 				methodPos := testPkg.Fset.Position(method.Pos())
 
-				require.EqualError(t, err, fmt.Sprintf(`template:1:2: executing "template" at <.Method>: function Method has 0 return values; should be 1 or 2: incorrect signature at %s`, methodPos))
+				require.EqualError(t, err, `template:1:2: executing "template" at <.Method>: function Method has 0 return values; should be 1 or 2`)
+				require.Equal(t, methodPos, findLeafError(t, err).Decl)
 			},
 		},
 		{
@@ -152,7 +153,8 @@ func TestTree(t *testing.T) {
 				require.NotNil(t, method)
 				methodPos := testPkg.Fset.Position(method.Pos())
 
-				require.EqualError(t, err, fmt.Sprintf(`template:1:2: executing "template" at <.Method>: invalid function signature for Method: second return value should be error; is int: incorrect signature at %s`, methodPos))
+				require.EqualError(t, err, `template:1:2: executing "template" at <.Method>: invalid function signature for Method: second return value should be error; is int`)
+				require.Equal(t, methodPos, findLeafError(t, err).Decl)
 			},
 		},
 		{
@@ -164,7 +166,8 @@ func TestTree(t *testing.T) {
 				require.NotNil(t, method)
 				methodPos := testPkg.Fset.Position(method.Pos())
 
-				require.EqualError(t, err, fmt.Sprintf(`template:1:2: executing "template" at <.Method>: function Method has 3 return values; should be 1 or 2: incorrect signature at %s`, methodPos))
+				require.EqualError(t, err, `template:1:2: executing "template" at <.Method>: function Method has 3 return values; should be 1 or 2`)
+				require.Equal(t, methodPos, findLeafError(t, err).Decl)
 			},
 		},
 		{
@@ -183,7 +186,8 @@ func TestTree(t *testing.T) {
 				require.NotNil(t, m2)
 				methodPos := testPkg.Fset.Position(m2.Pos())
 
-				require.EqualError(t, err, fmt.Sprintf(`template:1:9: executing "template" at <.Method.Method>: function Method has 0 return values; should be 1 or 2: incorrect signature at %s`, methodPos))
+				require.EqualError(t, err, `template:1:9: executing "template" at <.Method.Method>: function Method has 0 return values; should be 1 or 2`)
+				require.Equal(t, methodPos, findLeafError(t, err).Decl)
 			},
 		},
 		{

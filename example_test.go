@@ -5,7 +5,6 @@ import (
 	"go/token"
 	"log"
 	"slices"
-	"strings"
 	"text/template"
 	"text/template/parse"
 
@@ -82,14 +81,9 @@ func ExampleExecute() {
 	{
 		const templateName = "unknown field"
 		if err := check.Execute(global, tmpl.Lookup("unknown field").Tree, personObj.Type()); err != nil {
-			msg := err.Error()
-			// Strip machine-specific declared-at location for deterministic output.
-			if i := strings.Index(msg, " (declared at "); i >= 0 {
-				if j := strings.Index(msg[i:], ")"); j >= 0 {
-					msg = msg[:i] + msg[i+j+1:]
-				}
-			}
-			fmt.Println(msg)
+			// Error messages are deterministic: declaration positions live on
+			// the structured Decl field, not in the message.
+			fmt.Println(err.Error())
 		} else {
 			fmt.Printf("template %q type-check passed\n", templateName)
 		}
