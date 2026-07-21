@@ -1,7 +1,7 @@
 # check error reporting — guide for LSP integration
 
 This document describes how `github.com/typelate/check` (current as of
-v0.3.0-dev.2) captures template type-checking errors and how a tool (such
+v0.3.0-dev.3) captures template type-checking errors and how a tool (such
 as a language server) should consume and format them. The module requires
 Go 1.26 (examples below use `errors.AsType`).
 
