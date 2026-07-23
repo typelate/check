@@ -62,7 +62,7 @@ func TestError_DetailedError(t *testing.T) {
 		require.NotContains(t, message, "\n")
 	})
 
-	t.Run("lists fields and method signatures one per line", func(t *testing.T) {
+	t.Run("renders the receiver as an indented type declaration", func(t *testing.T) {
 		e := execute(t, `{{.Missing}}`, pageNamed)
 
 		var sb strings.Builder
@@ -70,10 +70,98 @@ func TestError_DetailedError(t *testing.T) {
 		detail := sb.String()
 
 		require.Contains(t, detail, "field or method Missing not found on")
-		require.Contains(t, detail, "web.Page has:")
-		require.Contains(t, detail, "\n  Title string")
-		require.Contains(t, detail, "\n  Owner web.User")
-		require.Contains(t, detail, "\n  Visit(count int) string")
+		require.Contains(t, detail, strings.Join([]string{
+			"  type Page struct {",
+			"    Title string",
+			"    Owner web.User",
+			"  }",
+			"",
+			"  func (p Page) SetOwner(owner web.User) string { /* ... */ }",
+			"  func (p Page) Visit(count int) string { /* ... */ }",
+		}, "\n"), "the declared type and receiver render bare, as at their declaration site")
+	})
+
+	t.Run("pointer receivers are preserved in method declarations", func(t *testing.T) {
+		counter := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Counter", nil),
+			types.NewStruct([]*types.Var{
+				types.NewField(token.NoPos, pkg, "Count", types.Typ[types.Int], false),
+			}, nil), nil)
+		incrementSig := types.NewSignatureType(types.NewVar(token.NoPos, pkg, "", types.NewPointer(counter)), nil, nil,
+			nil, types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Int])), false)
+		counter.AddMethod(types.NewFunc(token.NoPos, pkg, "Increment", incrementSig))
+
+		e := execute(t, `{{.Missing}}`, counter)
+
+		var sb strings.Builder
+		require.NoError(t, e.DetailedError(&sb, webQualifier))
+		require.Contains(t, sb.String(), "\n  func (c *Counter) Increment() int { /* ... */ }",
+			"a pointer receiver changes how a template executes, so the declaration keeps it")
+	})
+
+	t.Run("interfaces render as interface declarations", func(t *testing.T) {
+		greetSig := types.NewSignatureType(nil, nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])), false)
+		iface := types.NewInterfaceType([]*types.Func{
+			types.NewFunc(token.NoPos, pkg, "Greet", greetSig),
+		}, nil)
+		iface.Complete()
+		greeter := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Greeter", nil), iface, nil)
+
+		e := execute(t, `{{.Missing}}`, greeter)
+
+		var sb strings.Builder
+		require.NoError(t, e.DetailedError(&sb, webQualifier))
+		require.Contains(t, sb.String(), strings.Join([]string{
+			"  type Greeter interface {",
+			"    Greet() string",
+			"  }",
+		}, "\n"))
+	})
+
+	t.Run("named non-struct types render their underlying type", func(t *testing.T) {
+		flags := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Flags", nil), types.Typ[types.Int], nil)
+		hasSig := types.NewSignatureType(types.NewVar(token.NoPos, pkg, "", flags), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.Bool])), false)
+		flags.AddMethod(types.NewFunc(token.NoPos, pkg, "Has", hasSig))
+
+		e := execute(t, `{{.Missing}}`, flags)
+
+		var sb strings.Builder
+		require.NoError(t, e.DetailedError(&sb, webQualifier))
+		detail := sb.String()
+		require.Contains(t, detail, "\n  type Flags int\n")
+		require.Contains(t, detail, "\n  func (f Flags) Has() bool { /* ... */ }")
+	})
+
+	t.Run("an empty struct body collapses to struct{}", func(t *testing.T) {
+		gadget := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Gadget", nil), types.NewStruct(nil, nil), nil)
+		pingSig := types.NewSignatureType(types.NewVar(token.NoPos, pkg, "", gadget), nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, pkg, "", types.Typ[types.String])), false)
+		gadget.AddMethod(types.NewFunc(token.NoPos, pkg, "Ping", pingSig))
+
+		e := execute(t, `{{.Missing}}`, gadget)
+
+		var sb strings.Builder
+		require.NoError(t, e.DetailedError(&sb, webQualifier))
+		require.Contains(t, sb.String(), "\n  type Gadget struct{}\n",
+			"no fields to list means no braces spread across lines")
+	})
+
+	t.Run("private fields are noted but omitted", func(t *testing.T) {
+		data := types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, pkg, "Name", types.Typ[types.String], false),
+			types.NewField(token.NoPos, pkg, "secret", types.Typ[types.String], false),
+		}, nil)
+		e := execute(t, `{{.Missing}}`, data)
+
+		var sb strings.Builder
+		require.NoError(t, e.DetailedError(&sb, webQualifier))
+		require.Contains(t, sb.String(), strings.Join([]string{
+			"  struct {",
+			"    Name string",
+			"    // private fields omitted",
+			"  }",
+		}, "\n"))
 	})
 
 	t.Run("every line uses the passed qualifier", func(t *testing.T) {
@@ -106,7 +194,8 @@ func TestError_DetailedError(t *testing.T) {
 
 		var sb strings.Builder
 		require.NoError(t, e.DetailedError(&sb, nil))
-		require.Contains(t, sb.String(), "example.com/web.Page has:")
+		require.Contains(t, sb.String(), "type Page struct {",
+			"the declared name is bare even with a nil qualifier")
 		require.Contains(t, sb.String(), "Owner example.com/web.User")
 	})
 
@@ -151,8 +240,8 @@ func TestError_DetailedError(t *testing.T) {
 		require.NoError(t, e.DetailedError(&sb, webQualifier))
 		detail := sb.String()
 		require.Contains(t, detail, "not found on struct{...}")
-		require.Contains(t, detail, "struct{...} has:")
-		require.Contains(t, detail, "\n  Meta  struct{...}")
+		require.Contains(t, detail, "\n  struct {", "an unnamed type renders without a type keyword or name")
+		require.Contains(t, detail, "\n    Meta  struct{...}")
 		require.NotContains(t, detail, "F0 string",
 			"nested fields of an elided struct should not leak into the listing")
 	})
@@ -174,7 +263,7 @@ func TestError_DetailedError(t *testing.T) {
 
 		var sb strings.Builder
 		require.NoError(t, e.DetailedError(&sb, webQualifier))
-		require.Contains(t, sb.String(), "\n  Configure(struct{...}) string")
+		require.Contains(t, sb.String(), "\n  func (w Widget) Configure(struct{...}) string { /* ... */ }")
 	})
 
 	t.Run("write errors are propagated", func(t *testing.T) {
@@ -195,7 +284,7 @@ func TestError_DetailedError(t *testing.T) {
 
 		var sb strings.Builder
 		require.NoError(t, e.DetailedError(&sb, webQualifier))
-		require.Contains(t, sb.String(), "\n  Slug string")
+		require.Contains(t, sb.String(), "\n    Slug string")
 	})
 
 	t.Run("aggregates render one block per failure", func(t *testing.T) {

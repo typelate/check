@@ -7,23 +7,29 @@ import (
 	"go/types"
 	"io"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // maxInlineTypeLength bounds how long an inline (unnamed) type may render in
 // DetailedError output before it is elided to a summary such as struct{...}.
 const maxInlineTypeLength = 64
 
-// DetailedError writes a multi-line rendering of the error tree to sb. Each
+// DetailedError writes a multi-line rendering of the error tree to w. Each
 // failure block starts with the compact single-line message, followed by
-// supporting detail: identifier lookup failures list the receiver type's
-// exported fields (with their types) and method signatures one per line;
-// call failures show the callee signature and the argument types.
+// supporting detail: identifier lookup failures render the receiver type as
+// an indented Go-style declaration — exported fields (private fields are
+// noted but omitted) followed by exported methods as func declarations that
+// keep the declared receiver, so pointer receivers stay visible; call
+// failures show the callee signature and the argument types.
 //
 // Every line — including the leading location line — prints type names with
 // types.WriteType using q, so a caller can qualify packages for the target
 // file's import context, for example a language server rendering types with
 // the identifiers the importing file declares. A nil q prints full package
-// paths, matching Error.
+// paths, matching Error. The declared type name and the method receivers
+// are the exception: they always render bare, as written at their
+// declaration site.
 //
 // Unlike Error, massive inline composite types are elided: an unnamed
 // struct, interface, or signature whose rendering exceeds a small threshold
@@ -52,7 +58,7 @@ func (e *Error) writeDetail(sw *stickyWriter, tf typeFormatFunc) {
 	sw.writeString(e.line(tf))
 	if identErr, ok := errors.AsType[*IdentifierError](e.err); ok && identErr.Type != nil {
 		sw.writeString("\n\n")
-		writeTypeMembers(sw, identErr.Type, tf)
+		writeTypeDecl(sw, identErr.Type, tf)
 		return
 	}
 	if callErr, ok := errors.AsType[*CallError](e.err); ok && callErr.Signature != nil {
@@ -163,27 +169,61 @@ func shortSignature(sig *types.Signature, short typeFormatFunc) string {
 	return b.String()
 }
 
-// writeTypeMembers writes "T has:" followed by T's exported fields (name and
-// type, aligned) in declaration order and then its exported method
-// signatures, one per line. A type with no exported members gets
-// "T has no exported fields or methods".
-func writeTypeMembers(sw *stickyWriter, tp types.Type, tf typeFormatFunc) {
-	sw.writeString(tf(tp))
-	fields, methods := typeMembers(tp, tf)
+// writeTypeDecl writes tp as an indented Go-style type declaration: the
+// exported fields inside a struct (or interface) body, followed by the
+// exported methods rendered as func declarations with their declared
+// receivers, so pointer receivers stay visible. A type with no exported
+// members gets "T has no exported fields or methods".
+func writeTypeDecl(sw *stickyWriter, tp types.Type, tf typeFormatFunc) {
+	fields, methods, unexportedFields := typeMembers(tp, tf)
 	if len(fields) == 0 && len(methods) == 0 {
+		sw.writeString(tf(tp))
 		sw.writeString(" has no exported fields or methods")
 		return
 	}
-	sw.writeString(" has:")
-	width := 0
-	for _, f := range fields {
-		width = max(width, len(f.name))
+	name := declName(tp)
+	switch tp.Underlying().(type) {
+	case *types.Interface:
+		if name != "" {
+			sw.writef("  type %s interface {", name)
+		} else {
+			sw.writeString("  interface {")
+		}
+		for _, m := range methods {
+			sw.writef("\n    %s%s", m.name, m.detail)
+		}
+		sw.writeString("\n  }")
+		return
+	case *types.Struct:
+		if name != "" {
+			sw.writef("  type %s struct", name)
+		} else {
+			sw.writeString("  struct")
+		}
+		if len(fields) == 0 && !unexportedFields {
+			sw.writeString("{}")
+			break
+		}
+		sw.writeString(" {")
+		width := 0
+		for _, f := range fields {
+			width = max(width, len(f.name))
+		}
+		for _, f := range fields {
+			sw.writef("\n    %-*s %s", width, f.name, f.detail)
+		}
+		if unexportedFields {
+			sw.writeString("\n    // private fields omitted")
+		}
+		sw.writeString("\n  }")
+	default:
+		sw.writef("  type %s %s", name, tf(tp.Underlying()))
 	}
-	for _, f := range fields {
-		sw.writef("\n  %-*s %s", width, f.name, f.detail)
-	}
-	for _, m := range methods {
-		sw.writef("\n  %s%s", m.name, m.detail)
+	if len(methods) > 0 {
+		sw.writeString("\n")
+		for _, m := range methods {
+			sw.writef("\n  func (%s) %s%s { /* ... */ }", m.recv, m.name, m.detail)
+		}
 	}
 }
 
@@ -204,15 +244,18 @@ func writeCallDetail(sw *stickyWriter, callErr *CallError, tf typeFormatFunc) {
 }
 
 // typeMember pairs a field or method name with its rendered type or
-// signature.
+// signature. For methods on concrete types, recv holds the rendered declared
+// receiver (for example "p *web.Page"); it is empty for interface methods.
 type typeMember struct {
 	name, detail string
+	recv         string
 }
 
 // typeMembers collects tp's exported struct fields (including promoted
 // fields from embedded structs) and the exported methods in its method set,
-// rendered with tf.
-func typeMembers(tp types.Type, tf typeFormatFunc) (fields, methods []typeMember) {
+// rendered with tf. unexportedFields reports whether any unexported field
+// was skipped along the way.
+func typeMembers(tp types.Type, tf typeFormatFunc) (fields, methods []typeMember, unexportedFields bool) {
 	seen := make(map[string]bool)
 
 	// For interfaces, use the type directly (pointer-to-interface has an
@@ -224,36 +267,93 @@ func typeMembers(tp types.Type, tf typeFormatFunc) (fields, methods []typeMember
 	} else {
 		mset = types.NewMethodSet(types.NewPointer(tp))
 	}
-	for i := range mset.Len() {
-		obj := mset.At(i).Obj()
+	for sel := range mset.Methods() {
+		obj := sel.Obj()
 		name := obj.Name()
 		if !token.IsExported(name) || seen[name] {
 			continue
 		}
 		seen[name] = true
+		recv := ""
+		if sig, ok := obj.Type().(*types.Signature); ok && !types.IsInterface(tp) && sig.Recv() != nil {
+			recv = formatReceiver(sig.Recv(), tf)
+		}
 		methods = append(methods, typeMember{
 			name:   name,
 			detail: strings.TrimPrefix(tf(obj.Type()), "func"),
+			recv:   recv,
 		})
 	}
 
 	if st, ok := tp.Underlying().(*types.Struct); ok {
-		collectFieldMembers(st, tf, seen, &fields)
+		unexportedFields = collectFieldMembers(st, tf, seen, &fields)
 	}
-	return fields, methods
+	return fields, methods, unexportedFields
 }
 
-func collectFieldMembers(st *types.Struct, tf typeFormatFunc, seen map[string]bool, fields *[]typeMember) {
-	for i := range st.NumFields() {
-		f := st.Field(i)
+// formatReceiver renders a method receiver as it would appear in a func
+// declaration: the receiver type is bare (no package selector), as at its
+// declaration site. A receiver declared without a name gets one derived
+// from the first letter of its type name so the declaration reads
+// naturally.
+func formatReceiver(r *types.Var, tf typeFormatFunc) string {
+	name := r.Name()
+	if name == "" || name == "_" {
+		name = receiverLetter(r.Type())
+	}
+	return name + " " + receiverTypeName(r.Type(), tf)
+}
+
+// declName returns tp's bare declared name, or "" for unnamed types.
+func declName(tp types.Type) string {
+	switch t := tp.(type) {
+	case *types.Named:
+		return t.Obj().Name()
+	case *types.Alias:
+		return t.Obj().Name()
+	}
+	return ""
+}
+
+// receiverTypeName renders a receiver type bare, keeping a leading * for
+// pointer receivers.
+func receiverTypeName(tp types.Type, tf typeFormatFunc) string {
+	if p, ok := tp.(*types.Pointer); ok {
+		return "*" + receiverTypeName(p.Elem(), tf)
+	}
+	if name := declName(tp); name != "" {
+		return name
+	}
+	return tf(tp)
+}
+
+// receiverLetter derives a one-letter receiver name from the receiver's
+// (possibly pointer) named type.
+func receiverLetter(tp types.Type) string {
+	if p, ok := tp.(*types.Pointer); ok {
+		tp = p.Elem()
+	}
+	if n, ok := tp.(*types.Named); ok && n.Obj().Name() != "" {
+		r, _ := utf8.DecodeRuneInString(n.Obj().Name())
+		return string(unicode.ToLower(r))
+	}
+	return "r"
+}
+
+// collectFieldMembers reports whether it skipped any unexported field.
+func collectFieldMembers(st *types.Struct, tf typeFormatFunc, seen map[string]bool, fields *[]typeMember) (unexported bool) {
+	for f := range st.Fields() {
 		if !f.Exported() {
+			unexported = true
 			continue
 		}
 		if f.Embedded() {
 			// Dereference so fields promoted through an embedded *T are
 			// listed too.
 			if inner, ok := dereference(f.Type()).Underlying().(*types.Struct); ok {
-				collectFieldMembers(inner, tf, seen, fields)
+				if collectFieldMembers(inner, tf, seen, fields) {
+					unexported = true
+				}
 			}
 			continue
 		}
@@ -263,4 +363,5 @@ func collectFieldMembers(st *types.Struct, tf typeFormatFunc, seen map[string]bo
 		seen[f.Name()] = true
 		*fields = append(*fields, typeMember{name: f.Name(), detail: tf(f.Type())})
 	}
+	return unexported
 }
