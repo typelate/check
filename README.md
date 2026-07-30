@@ -23,7 +23,7 @@ Call `Execute` with a `types.Type` for the template's data (`.`) and the templat
 ## Related projects
 
 - [`muxt`](https://github.com/typelate/muxt) &mdash; builds on this library to type-check templates wired to HTTP handlers. If you only need command-line checks, `muxt check` works too.
-- [jba/templatecheck](https://github.com/jba/templatecheck) &mdash; a more mature alternative for template type-checking.
+- [jba/templatecheck](https://github.com/jba/templatecheck) &mdash; a reflect based alternative for template type-checking maintained by a Go team member.
 
 ## Limitations
 
