@@ -73,12 +73,12 @@ func TestError_DetailedError(t *testing.T) {
 		require.Contains(t, detail, strings.Join([]string{
 			"  type Page struct {",
 			"    Title string",
-			"    Owner web.User",
+			"    Owner User",
 			"  }",
 			"",
-			"  func (p Page) SetOwner(owner web.User) string { /* ... */ }",
+			"  func (p Page) SetOwner(owner User) string { /* ... */ }",
 			"  func (p Page) Visit(count int) string { /* ... */ }",
-		}, "\n"), "the declared type and receiver render bare, as at their declaration site")
+		}, "\n"), "the declaration renders as source in its own package: no selector on same-package types")
 	})
 
 	t.Run("pointer receivers are preserved in method declarations", func(t *testing.T) {
@@ -147,6 +147,32 @@ func TestError_DetailedError(t *testing.T) {
 			"no fields to list means no braces spread across lines")
 	})
 
+	t.Run("foreign package types keep the qualifier inside declarations", func(t *testing.T) {
+		dbPkg := types.NewPackage("example.com/db", "db")
+		connNamed := types.NewNamed(types.NewTypeName(token.NoPos, dbPkg, "Conn", nil),
+			types.NewStruct(nil, nil), nil)
+		account := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Account", nil),
+			types.NewStruct([]*types.Var{
+				types.NewField(token.NoPos, pkg, "Owner", userNamed, false),
+				types.NewField(token.NoPos, pkg, "DB", connNamed, false),
+			}, nil), nil)
+
+		e := execute(t, `{{.Missing}}`, account)
+
+		var sb strings.Builder
+		require.NoError(t, e.DetailedError(&sb, webQualifier))
+		detail := sb.String()
+		require.Contains(t, detail, "\n    Owner User\n",
+			"Account and User are both in web, so no selector")
+		require.Contains(t, detail, "\n    DB    db.Conn\n",
+			"Conn lives in another package, so the passed qualifier applies")
+
+		sb.Reset()
+		require.NoError(t, e.DetailedError(&sb, nil))
+		require.Contains(t, sb.String(), "\n    DB    example.com/db.Conn\n",
+			"a nil qualifier prints full paths for foreign packages")
+	})
+
 	t.Run("private fields are noted but omitted", func(t *testing.T) {
 		data := types.NewStruct([]*types.Var{
 			types.NewField(token.NoPos, pkg, "Name", types.Typ[types.String], false),
@@ -196,7 +222,10 @@ func TestError_DetailedError(t *testing.T) {
 		require.NoError(t, e.DetailedError(&sb, nil))
 		require.Contains(t, sb.String(), "type Page struct {",
 			"the declared name is bare even with a nil qualifier")
-		require.Contains(t, sb.String(), "Owner example.com/web.User")
+		require.Contains(t, sb.String(), "Owner User",
+			"same-package field types are bare even with a nil qualifier")
+		require.Contains(t, sb.String(), "not found on example.com/web.Page",
+			"the message line still prints the full package path")
 	})
 
 	t.Run("a memberless type says so", func(t *testing.T) {
