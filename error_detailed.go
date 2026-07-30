@@ -27,9 +27,10 @@ const maxInlineTypeLength = 64
 // types.WriteType using q, so a caller can qualify packages for the target
 // file's import context, for example a language server rendering types with
 // the identifiers the importing file declares. A nil q prints full package
-// paths, matching Error. The declared type name and the method receivers
-// are the exception: they always render bare, as written at their
-// declaration site.
+// paths, matching Error. The rendered type declaration is the exception: it
+// reads as source at its declaration site, so types from the declared
+// type's own package print bare while foreign packages still use q (or
+// their full path when q is nil).
 //
 // Unlike Error, massive inline composite types are elided: an unnamed
 // struct, interface, or signature whose rendering exceeds a small threshold
@@ -41,24 +42,24 @@ const maxInlineTypeLength = 64
 // DetailedError returns the first error encountered writing to w, or nil.
 func (e *Error) DetailedError(w io.Writer, q types.Qualifier) error {
 	sw := &stickyWriter{w: w}
-	e.writeDetail(sw, shortTypeFormat(q))
+	e.writeDetail(sw, q, shortTypeFormat(q))
 	return sw.err
 }
 
-func (e *Error) writeDetail(sw *stickyWriter, tf typeFormatFunc) {
+func (e *Error) writeDetail(sw *stickyWriter, q types.Qualifier, tf typeFormatFunc) {
 	if len(e.children) > 0 {
 		for i, child := range e.children {
 			if i > 0 {
 				sw.writeString("\n\n")
 			}
-			child.writeDetail(sw, tf)
+			child.writeDetail(sw, q, tf)
 		}
 		return
 	}
 	sw.writeString(e.line(tf))
 	if identErr, ok := errors.AsType[*IdentifierError](e.err); ok && identErr.Type != nil {
 		sw.writeString("\n\n")
-		writeTypeDecl(sw, identErr.Type, tf)
+		writeTypeDecl(sw, identErr.Type, declTypeFormat(identErr.Type, q, tf))
 		return
 	}
 	if callErr, ok := errors.AsType[*CallError](e.err); ok && callErr.Signature != nil {
@@ -225,6 +226,32 @@ func writeTypeDecl(sw *stickyWriter, tp types.Type, tf typeFormatFunc) {
 			sw.writef("\n  func (%s) %s%s { /* ... */ }", m.recv, m.name, m.detail)
 		}
 	}
+}
+
+// declTypeFormat renders types as they read in source at tp's declaration
+// site: types from tp's own package print bare, foreign packages use q (or
+// their full path when q is nil). Unnamed types have no declaration site,
+// so tf is returned unchanged.
+func declTypeFormat(tp types.Type, q types.Qualifier, tf typeFormatFunc) typeFormatFunc {
+	var local *types.Package
+	switch t := dereference(tp).(type) {
+	case *types.Named:
+		local = t.Obj().Pkg()
+	case *types.Alias:
+		local = t.Obj().Pkg()
+	}
+	if local == nil {
+		return tf
+	}
+	return shortTypeFormat(func(p *types.Package) string {
+		if p == local {
+			return ""
+		}
+		if q == nil {
+			return p.Path()
+		}
+		return q(p)
+	})
 }
 
 func writeCallDetail(sw *stickyWriter, callErr *CallError, tf typeFormatFunc) {
