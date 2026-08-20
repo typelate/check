@@ -245,15 +245,24 @@ func (e *Error) messageWith(tf typeFormatFunc) string {
 	return e.err.Error()
 }
 
+// untypedTrimmed wraps a type whose message drops the "untyped " prefix
+// go/types gives constant types, so a range over 1.2 reports "float" rather
+// than "untyped float". Wrapping keeps the type itself in the argument list
+// so DetailedError can still re-render it with its own qualifier.
+type untypedTrimmed struct{ tp types.Type }
+
 // renderFormat is fmt.Sprintf with types.Type args rendered through tf.
 func renderFormat(tf typeFormatFunc, format string, args ...any) string {
 	rendered := make([]any, len(args))
 	for i, arg := range args {
-		if tp, ok := arg.(types.Type); ok {
-			rendered[i] = tf(tp)
-			continue
+		switch a := arg.(type) {
+		case untypedTrimmed:
+			rendered[i] = strings.TrimPrefix(tf(a.tp), "untyped ")
+		case types.Type:
+			rendered[i] = tf(a)
+		default:
+			rendered[i] = arg
 		}
-		rendered[i] = arg
 	}
 	return fmt.Sprintf(format, rendered...)
 }
@@ -965,7 +974,7 @@ func (s *scope) checkRangeNode(tree *parse.Tree, dot types.Type, n *parse.RangeN
 				child.variables[n.Pipe.Decl[0].Ident[0]] = x
 			}
 		default:
-			return newError(ErrorTypeRange, tree, n.Pipe, "range can't iterate over %s", strings.TrimPrefix(s.global.TypeString(pipeType), "untyped ")).withX(pipeType)
+			return newError(ErrorTypeRange, tree, n.Pipe, "range can't iterate over %s", untypedTrimmed{pipeType}).withX(pipeType)
 		}
 	case *types.Signature:
 		if v1, v2, ok := isIter2(pt); ok {

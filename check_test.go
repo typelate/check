@@ -482,6 +482,19 @@ func TestTree(t *testing.T) {
 			},
 		},
 		{
+			Name:     "range over an untyped constant",
+			Template: `{{range 1.2}}{{end}}`,
+			Data:     nil,
+			Error: func(t *testing.T, checkErr, execErr error, tp types.Type) {
+				require.Error(t, execErr)
+				// The "untyped " prefix go/types uses for constant types is
+				// trimmed: the template author wrote a float, not a Go
+				// "untyped float".
+				require.ErrorContains(t, checkErr, "range can't iterate over float")
+				require.NotContains(t, checkErr.Error(), "untyped")
+			},
+		},
+		{
 			Name:     "range over string data",
 			Template: `{{range .}}{{end}}`,
 			Data:     "fail",
