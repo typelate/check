@@ -150,12 +150,13 @@ func builtInCheck(global *Global, funcIdent string, nodes []parse.Node, argTypes
 		if len(argTypes) < 1 {
 			return nil, errorf(ErrorTypeCallArguments, "built-in len expects 1 argument got %d", len(argTypes))
 		}
-		switch x := argTypes[0].Underlying().(type) {
+		arg := argTypes[0]
+		switch x := arg.Underlying().(type) {
 		default:
-			return nil, errorf(ErrorTypeCallArguments, "built-in len expects the first argument to be an array, slice, map, or string got %s", x).withX(x)
+			return nil, errorf(ErrorTypeCallArguments, "built-in len expects the first argument to be an array, slice, map, or string got %s", arg).withX(arg)
 		case *types.Basic:
 			if x.Kind() != types.String {
-				return nil, errorf(ErrorTypeCallArguments, "built-in len expects the first argument to be an array, slice, map, or string got %s", x).withX(x)
+				return nil, errorf(ErrorTypeCallArguments, "built-in len expects the first argument to be an array, slice, map, or string got %s", arg).withX(arg)
 			}
 		case *types.Array:
 		case *types.Slice:
@@ -171,12 +172,13 @@ func builtInCheck(global *Global, funcIdent string, nodes []parse.Node, argTypes
 				return nil, errorf(ErrorTypeCallArguments, "index %s out of bound", n.Text)
 			}
 		}
-		switch x := argTypes[0].Underlying().(type) {
+		arg := argTypes[0]
+		switch x := arg.Underlying().(type) {
 		default:
-			return nil, errorf(ErrorTypeCallArguments, "built-in slice expects the first argument to be an array, slice, or string got %s", x).withX(x)
+			return nil, errorf(ErrorTypeCallArguments, "built-in slice expects the first argument to be an array, slice, or string got %s", arg).withX(arg)
 		case *types.Basic:
 			if x.Kind() != types.String {
-				return nil, errorf(ErrorTypeCallArguments, "built-in slice expects the first argument to be an array, slice, or string got %s", x).withX(x)
+				return nil, errorf(ErrorTypeCallArguments, "built-in slice expects the first argument to be an array, slice, or string got %s", arg).withX(arg)
 			}
 			if len(nodes) == 4 {
 				return nil, errorf(ErrorTypeCallArguments, "can not 3 index slice a string")
