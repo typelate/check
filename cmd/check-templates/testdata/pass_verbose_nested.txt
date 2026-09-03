@@ -9,6 +9,17 @@ check-templates -v
 cmpenv stdout want.txt
 ! stderr .
 
+# A call in a Go file has a byte offset. A {{template}} node's location
+# comes from parse.Tree.ErrorContext, which reports a line and a column
+# and no offset at all, so the field is left out rather than reported as
+# a byte 0 that cannot be told from a real one.
+check-templates -v -o jsonl
+cmpenv stdout want-jsonl.txt
+! stderr .
+
+-- want-jsonl.txt --
+{"filename":"$WORK/main.go","line":22,"column":6,"offset":228,"template_name":"index.gohtml","data_type":"example.com/app.Page"}
+{"filename":"$WORK/index.gohtml","line":1,"column":12,"template_name":"index.gohtml","data_type":"example.com/app.Page"}
 -- want.txt --
 $WORK/main.go:22:6	"index.gohtml"	example.com/app.Page
 $WORK/index.gohtml:1:12	"index.gohtml"	example.com/app.Page
