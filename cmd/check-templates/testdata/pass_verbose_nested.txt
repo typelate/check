@@ -1,8 +1,13 @@
 # The -v flag also lists nested {{template}} calls.
+#
+# A {{template}} node is positioned at its name literal, so the node in
+# index.gohtml sits at offset 11, which go/token calls column 12.
+# ErrorContext, where the location comes from, counts columns from zero
+# and would call it column 11.
 
 check-templates -v
 stdout 'main\.go:.*"index\.gohtml"\texample\.com/app\.Page'
-stdout 'index\.gohtml:1:.*"index\.gohtml"\texample\.com/app\.Page'
+stdout 'index\.gohtml:1:12\t"index\.gohtml"\texample\.com/app\.Page'
 ! stderr .
 
 -- go.mod --
