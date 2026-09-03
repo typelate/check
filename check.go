@@ -375,6 +375,11 @@ type Global struct {
 	InspectTemplateNode TemplateNodeInspectorFunc
 	InspectCallNode     ExecuteTemplateNodeInspectorFunc
 
+	// Definitions locates where each template was defined, for the
+	// inspector callbacks. It may be nil, in which case inspectors
+	// receive a zero Definition.
+	Definitions DefinitionFinder
+
 	// Qualifier controls how types are printed by TypeString and by the
 	// legacy VerboseError/FormatVerbose rendering only. Error messages
 	// always print full package paths (nil qualifier), and DetailedError
@@ -383,7 +388,16 @@ type Global struct {
 	Qualifier types.Qualifier
 }
 
-type TemplateNodeInspectorFunc func(node *parse.TemplateNode, t *parse.Tree, tp types.Type)
+// TemplateNodeInspectorFunc is called for each {{template}} node whose
+// pipeline type checks.
+//
+// The tree is the one holding node, the tree the node was written in, not
+// the tree of the template it invokes; use it to locate node, for example
+// with its ErrorContext method. The type is the dot flowing into the
+// invoked template, and def locates where that template was defined. A
+// node naming a template that does not exist still reaches the inspector,
+// with a zero def.
+type TemplateNodeInspectorFunc func(node *parse.TemplateNode, t *parse.Tree, tp types.Type, def Definition)
 
 func NewGlobal(pkg *types.Package, fileSet *token.FileSet, trees TreeFinder, fnChecker CallChecker) *Global {
 	return &Global{
@@ -393,6 +407,19 @@ func NewGlobal(pkg *types.Package, fileSet *token.FileSet, trees TreeFinder, fnC
 		fileSet:         fileSet,
 		typeNodeMapping: make(TypeNodeMapping),
 	}
+}
+
+// definition reports where name was defined, or the zero Definition when
+// no definition source is configured or the name is unknown.
+func (g *Global) definition(name string) Definition {
+	if g.Definitions == nil {
+		return Definition{}
+	}
+	def, ok := g.Definitions.FindDefinition(name)
+	if !ok {
+		return Definition{}
+	}
+	return def
 }
 
 // TypeString returns the string representation of typ using the configured Qualifier.
@@ -426,6 +453,19 @@ type TreeFinder interface {
 type FindTreeFunc func(name string) (*parse.Tree, bool)
 
 func (fn FindTreeFunc) FindTree(name string) (*parse.Tree, bool) {
+	return fn(name)
+}
+
+// DefinitionFinder reports where a template name was defined. When a name
+// was defined more than once it reports the definition that survived, the
+// one template lookup resolves to.
+type DefinitionFinder interface {
+	FindDefinition(name string) (Definition, bool)
+}
+
+type FindDefinitionFunc func(name string) (Definition, bool)
+
+func (fn FindDefinitionFunc) FindDefinition(name string) (Definition, bool) {
 	return fn(name)
 }
 
@@ -675,7 +715,7 @@ func (s *scope) checkTemplateNode(tree *parse.Tree, dot types.Type, n *parse.Tem
 		x = types.Typ[types.UntypedNil]
 	}
 	if fn := s.global.InspectTemplateNode; fn != nil && pipeOK {
-		fn(n, tree, x)
+		fn(n, tree, x, s.global.definition(n.Name))
 	}
 	childTree, ok := s.global.trees.FindTree(n.Name)
 	if !ok {
