@@ -189,7 +189,11 @@ func parseLocation(loc string) token.Position {
 	// The filename may contain colons (e.g., Windows paths), so split from the right.
 	var pos token.Position
 	if i := strings.LastIndex(loc, ":"); i >= 0 {
+		// ErrorContext counts columns from zero; token.Position counts
+		// from one, so that a position reads the same as one taken from
+		// a Go file.
 		pos.Column, _ = strconv.Atoi(loc[i+1:])
+		pos.Column++
 		loc = loc[:i]
 	}
 	if i := strings.LastIndex(loc, ":"); i >= 0 {
