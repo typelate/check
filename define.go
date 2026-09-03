@@ -114,11 +114,13 @@ func scanAction(text string, start int, left, right string) (action, bool) {
 	if hasLeftTrimMarker(text[p:]) {
 		p++
 	}
+	// The trim marker is a minus followed by white space, so the comment
+	// opener can only be found after that space is stepped over.
+	p = skipSpace(text, p)
 	if strings.HasPrefix(text[p:], leftComment) {
 		return scanComment(text, start, p, right)
 	}
 
-	p = skipSpace(text, p)
 	keyword := p
 	for p < len(text) && !isSpace(text[p]) && !strings.HasPrefix(text[p:], right) {
 		p++

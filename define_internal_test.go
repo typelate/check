@@ -89,6 +89,22 @@ func TestScanDefinitions(t *testing.T) {
 			want: []string{`"real" define="{{define \"real\"}}"@27 name="\"real\""@36 end="{{end}}"@45`},
 		},
 		{
+			// A comment may carry a trim marker. Unless it is recognised
+			// as a comment the scan stops at the first right delimiter in
+			// the body, and the comment's own end clause is then mistaken
+			// for the define's.
+			name: "a left trimmed comment hiding a delimiter and an end clause",
+			text: `{{define "a"}}{{- /* a}}b {{end}} c */ -}}body{{end}}`,
+			want: []string{`"a" define="{{define \"a\"}}"@0 name="\"a\""@9 end="{{end}}"@46`},
+		},
+		{
+			// Same failure, seen from the other side: a define clause
+			// inside a trimmed comment must not become a definition.
+			name: "a left trimmed comment hiding a define clause",
+			text: `{{define "a"}}{{- /* x}} {{define "fake"}}y{{end}} */ -}}b{{end}}`,
+			want: []string{`"a" define="{{define \"a\"}}"@0 name="\"a\""@9 end="{{end}}"@58`},
+		},
+		{
 			name: "a name containing the right delimiter",
 			text: `{{define "a}}b"}}x{{end}}`,
 			want: []string{`"a}}b" define="{{define \"a}}b\"}}"@0 name="\"a}}b\""@9 end="{{end}}"@18`},
