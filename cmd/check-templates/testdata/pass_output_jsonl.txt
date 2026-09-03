@@ -1,13 +1,11 @@
 # The -o jsonl flag outputs each call as a JSON object per line.
 
 check-templates -v -o jsonl
-stdout '"filename":".*main\.go"'
-stdout '"template_name":"index\.gohtml"'
-stdout '"data_type":"example\.com/app\.Page"'
-stdout '"line":'
-stdout '"column":'
+cmpenv stdout want.txt
 ! stderr .
 
+-- want.txt --
+{"filename":"$WORK/main.go","line":22,"column":6,"offset":277,"template_name":"index.gohtml","data_type":"example.com/app.Page"}
 -- go.mod --
 module example.com/app
 

@@ -6,10 +6,12 @@
 # and would call it column 11.
 
 check-templates -v
-stdout 'main\.go:.*"index\.gohtml"\texample\.com/app\.Page'
-stdout 'index\.gohtml:1:12\t"index\.gohtml"\texample\.com/app\.Page'
+cmpenv stdout want.txt
 ! stderr .
 
+-- want.txt --
+$WORK/main.go:22:6	"index.gohtml"	example.com/app.Page
+$WORK/index.gohtml:1:12	"index.gohtml"	example.com/app.Page
 -- go.mod --
 module example.com/app
 

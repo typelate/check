@@ -3,9 +3,11 @@
 # declaration.
 
 check-templates -definitions
-stdout 'about\.gohtml:1:1\+21\t"farewell"\t.*about\.gohtml:1:25\+7\t.*about\.gohtml:1:10\+10'
+cmpenv stdout want.txt
 ! stderr .
 
+-- want.txt --
+$WORK/about.gohtml:1:1+21	"farewell"	$WORK/about.gohtml:1:25+7	$WORK/about.gohtml:1:10+10
 -- go.mod --
 module example.com/app
 

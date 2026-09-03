@@ -1,9 +1,11 @@
 # The -v flag lists each ExecuteTemplate call with position, template name, and data type.
 
 check-templates -v
-stdout 'main\.go:.*"index\.gohtml"\texample\.com/app\.Page'
+cmpenv stdout want.txt
 ! stderr .
 
+-- want.txt --
+$WORK/main.go:22:6	"index.gohtml"	example.com/app.Page
 -- go.mod --
 module example.com/app
 
