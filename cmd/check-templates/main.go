@@ -85,11 +85,11 @@ func run(dir string, args []string, stdout, stderr io.Writer) int {
 			exitCode = 1
 		}
 		if err := check.Package(pkg, func(node *ast.CallExpr, t *parse.Tree, tp types.Type, def check.Definition) {
-			writeCall(fset.Position(node.Pos()), t.Name, tp)
+			writeCall(goCall(fset.Position(node.Pos()), t.Name, tp))
 			writeDefinition(def)
 		}, func(node *parse.TemplateNode, t *parse.Tree, tp types.Type, def check.Definition) {
 			loc, _ := t.ErrorContext(node)
-			writeCall(lex.Position(loc), t.Name, tp)
+			writeCall(templateCall(lex.Position(loc), t.Name, tp))
 			writeDefinition(def)
 		}); err != nil {
 			writeCheckError(stderr, err)
@@ -156,12 +156,48 @@ func splitVerbose(e *check.Error) (line, detail string) {
 }
 
 type callRecord struct {
-	Filename     string `json:"filename"`
-	Line         int    `json:"line"`
-	Column       int    `json:"column"`
-	Offset       int    `json:"offset"`
+	Filename string `json:"filename"`
+	Line     int    `json:"line"`
+	Column   int    `json:"column"`
+
+	// Offset is absent for a call located in template text, because
+	// parse.Tree.ErrorContext reports a line and a column and no byte
+	// offset. Reporting a zero there could not be told from a call that
+	// really begins at the first byte.
+	Offset *int `json:"offset,omitempty"`
+
 	TemplateName string `json:"template_name"`
 	DataType     string `json:"data_type"`
+}
+
+// goCall records a call written in a Go file, whose position the file
+// set knows down to the byte.
+func goCall(pos token.Position, templateName string, dataType types.Type) callRecord {
+	return callRecord{
+		Filename:     pos.Filename,
+		Line:         pos.Line,
+		Column:       pos.Column,
+		Offset:       &pos.Offset,
+		TemplateName: templateName,
+		DataType:     dataType.String(),
+	}
+}
+
+// templateCall records a call written in template text, which is located
+// by line and column alone.
+func templateCall(pos token.Position, templateName string, dataType types.Type) callRecord {
+	return callRecord{
+		Filename:     pos.Filename,
+		Line:         pos.Line,
+		Column:       pos.Column,
+		TemplateName: templateName,
+		DataType:     dataType.String(),
+	}
+}
+
+// Position rebuilds the location a record was made from, for rendering.
+func (r callRecord) Position() token.Position {
+	return token.Position{Filename: r.Filename, Line: r.Line, Column: r.Column}
 }
 
 // gate returns w when the output it carries was asked for, and a sink
@@ -244,23 +280,16 @@ func writeDefinitionFunc(outputFormat string, stdout io.Writer) func(def check.D
 	}
 }
 
-func writeCallFunc(outputFormat string, stdout io.Writer) func(pos token.Position, templateName string, dataType types.Type) {
+func writeCallFunc(outputFormat string, stdout io.Writer) func(rec callRecord) {
 	switch outputFormat {
 	case "jsonl":
 		enc := json.NewEncoder(stdout)
-		return func(pos token.Position, templateName string, dataType types.Type) {
-			_ = enc.Encode(callRecord{
-				Filename:     pos.Filename,
-				Line:         pos.Line,
-				Column:       pos.Column,
-				Offset:       pos.Offset,
-				TemplateName: templateName,
-				DataType:     dataType.String(),
-			})
+		return func(rec callRecord) {
+			_ = enc.Encode(rec)
 		}
 	default:
-		return func(pos token.Position, templateName string, dataType types.Type) {
-			_, _ = fmt.Fprintf(stdout, "%s\t%q\t%s\n", pos, templateName, dataType)
+		return func(rec callRecord) {
+			_, _ = fmt.Fprintf(stdout, "%s\t%q\t%s\n", rec.Position(), rec.TemplateName, rec.DataType)
 		}
 	}
 }

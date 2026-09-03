@@ -1,0 +1,48 @@
+# A template can be named without ever being parsed into. template.New
+# puts an entry in the set straight away, so a lookup of that name finds
+# a template whose tree is still nil, and everything downstream has to
+# expect one.
+#
+# Here the set is rooted at "base" but no base.gohtml is embedded, so
+# "base" is named and never filled in.
+#
+# Nothing is reported for it. Executing it would fail at run time with an
+# incomplete template, which this tool does not diagnose yet, but it has
+# to say so rather than crash, and the templates around it still check.
+
+check-templates -v
+stdout 'index\.gohtml'
+! stderr .
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- main.go --
+package main
+
+import (
+	"embed"
+	"fmt"
+	"html/template"
+	"io"
+)
+
+//go:embed *.gohtml
+var source embed.FS
+
+var templates = template.Must(template.New("base").ParseFS(source, "*"))
+
+type Page struct {
+	Title string
+}
+
+func render() {
+	_ = templates.ExecuteTemplate(io.Discard, "base", Page{Title: "Home"})
+	_ = templates.ExecuteTemplate(io.Discard, "index.gohtml", Page{Title: "Home"})
+}
+
+var _ = fmt.Sprint
+
+-- index.gohtml --
+<h1>{{.Title}}</h1>

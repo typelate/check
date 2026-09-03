@@ -273,13 +273,23 @@ func checkCalls(pkg *packages.Package, pending []pendingCall, resolved map[types
 		if looked == nil {
 			continue
 		}
+		// A name can be given to a template that is never parsed into,
+		// which template.New does on its own, and the lookup finds that
+		// entry with its tree still nil. There is nothing to walk.
+		// Executing such a template fails at run time as an incomplete
+		// template, a mistake this does not report yet, but it must not
+		// be walked as though it had a body.
+		tree := looked.Tree()
+		if tree == nil {
+			continue
+		}
 		global := NewGlobal(pkg.Types, pkg.Fset, rt.templates, mergedFunctions)
 		global.InspectTemplateNode = inspectTemplate
 		global.Definitions = rt.definitions
 		if inspectCall != nil {
-			inspectCall(p.call, looked.Tree(), p.dataType, global.definition(p.templateName))
+			inspectCall(p.call, tree, p.dataType, global.definition(p.templateName))
 		}
-		if err := Execute(global, looked.Tree(), p.dataType); err != nil {
+		if err := Execute(global, tree, p.dataType); err != nil {
 			errs = append(errs, err)
 		}
 	}
