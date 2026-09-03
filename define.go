@@ -122,7 +122,7 @@ func scanAction(text string, start int, left, right string) (action, bool) {
 	}
 
 	keyword := p
-	for p < len(text) && !isSpace(text[p]) && !strings.HasPrefix(text[p:], right) {
+	for p < len(text) && continuesIdentifier(text[p]) {
 		p++
 	}
 
@@ -178,6 +178,24 @@ func scanName(text string, p int) (name string, lit textSpan, next int) {
 		return "", invalidSpan, p
 	}
 	return name, textSpan{Off: p, Len: len(quoted)}, p + len(quoted)
+}
+
+// continuesIdentifier reports whether c can continue an identifier.
+//
+// text/template/parse ends an identifier at the first byte that cannot
+// continue one, so a clause keyword has to end there too: {{if.X}} opens
+// a block exactly as {{if .X}} does, and reading the keyword as "if.X"
+// would leave its {{end}} to close an enclosing clause instead.
+//
+// parse admits any Unicode letter or digit. Only ASCII is accepted here,
+// which ends a keyword early on a multi byte rune — harmless, because
+// every keyword that opens or closes a clause is ASCII, so an early end
+// can only produce a word that is not one of them.
+func continuesIdentifier(c byte) bool {
+	return c == '_' ||
+		'a' <= c && c <= 'z' ||
+		'A' <= c && c <= 'Z' ||
+		'0' <= c && c <= '9'
 }
 
 // isSpace reports whether c is template white space, matching the
