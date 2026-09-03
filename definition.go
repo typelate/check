@@ -3,6 +3,7 @@ package check
 import (
 	"go/ast"
 	"go/token"
+	"os"
 	"strconv"
 	"text/template/parse"
 	"unicode/utf8"
@@ -102,16 +103,45 @@ func definitionsInLiteral(fset *token.FileSet, lit *ast.BasicLit, rootName, left
 	if err != nil {
 		return nil
 	}
-	offsets := literalOffsets(lit.Value)
-	if offsets == nil {
-		return nil
-	}
 	file := fset.File(lit.Pos())
 	if file == nil {
 		return nil
 	}
+	literal, ok := literalSource(file, lit)
+	if !ok {
+		return nil
+	}
+	offsets := literalOffsets(literal)
+	if offsets == nil {
+		return nil
+	}
 	src := source{file: file, base: file.Offset(lit.Pos()), offsets: offsets}
 	return definitions(src, rootName, text, leftDelim, rightDelim)
+}
+
+// literalSource returns the literal as it is written in the file.
+//
+// go/scanner drops the carriage returns from a raw string literal, so its
+// value is shorter than the bytes it was read from, while positions keep
+// addressing the file. Mapping a value offset back onto a real byte
+// therefore has to walk the file's own bytes. Only a literal whose two
+// lengths disagree needs them, so the ordinary file is never re-read.
+func literalSource(file *token.File, lit *ast.BasicLit) (string, bool) {
+	start, end := file.Offset(lit.Pos()), file.Offset(lit.End())
+	if end-start == len(lit.Value) {
+		return lit.Value, true
+	}
+	b, err := os.ReadFile(file.Name())
+	if err != nil || start < 0 || end > len(b) {
+		return "", false
+	}
+	literal := string(b[start:end])
+	// The file may have changed since it was parsed, in which case these
+	// offsets address something else entirely.
+	if len(literal) == 0 || len(lit.Value) == 0 || literal[0] != lit.Value[0] {
+		return "", false
+	}
+	return literal, true
 }
 
 // definitions locates every template text defines.
