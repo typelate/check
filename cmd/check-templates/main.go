@@ -84,9 +84,9 @@ func run(dir string, args []string, stdout, stderr io.Writer) int {
 			_, _ = fmt.Fprintln(stderr, e)
 			exitCode = 1
 		}
-		if err := check.Package(pkg, func(node *ast.CallExpr, t *parse.Tree, tp types.Type) {
+		if err := check.Package(pkg, func(node *ast.CallExpr, t *parse.Tree, tp types.Type, _ check.Definition) {
 			writeCall(fset.Position(node.Pos()), t.Name, tp)
-		}, func(node *parse.TemplateNode, t *parse.Tree, tp types.Type) {
+		}, func(node *parse.TemplateNode, t *parse.Tree, tp types.Type, _ check.Definition) {
 			loc, _ := t.ErrorContext(node)
 			writeCall(parseLocation(loc), t.Name, tp)
 		}); err != nil {

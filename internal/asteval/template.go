@@ -37,6 +37,33 @@ type Template interface {
 type TemplateMetadata struct {
 	EmbedFilePaths []string
 	ParseCalls     []*ast.BasicLit
+	Sources        []ParsedText
+}
+
+// ParsedText records the source one Parse or ParseFS call consumed, in
+// call order, so that template definitions can be located afterward.
+//
+// The delimiters are recorded because they are only known here: they are
+// set by Delims calls earlier in the chain, and neither template.Template
+// nor parse.Tree reports them afterward.
+type ParsedText struct {
+	// RootName is the name of the template that owns the text.
+	RootName string
+
+	// Filename is the template file the text was read from and Text is
+	// its content. Both are empty when the text came from a Go string
+	// literal, which Literal holds instead.
+	Filename string
+	Text     string
+
+	// Literal is the Go string literal the text was written as, nil when
+	// the text was read from a file.
+	Literal *ast.BasicLit
+
+	// LeftDelim and RightDelim are the delimiters in effect for this
+	// call. Empty means the template defaults.
+	LeftDelim  string
+	RightDelim string
 }
 
 func EvaluateTemplateSelector(ts Template, pkg *types.Package, typesInfo *types.Info, expression ast.Expr, workingDirectory, templatesVariable, rDelim, lDelim string, fileSet *token.FileSet, files []*ast.File, embeddedPaths []string, funcTypeMaps TemplateFunctions, fm map[string]any, meta *TemplateMetadata) (Template, string, string, error) {
@@ -67,21 +94,17 @@ func EvaluateTemplateSelector(ts Template, pkg *types.Package, typesInfo *types.
 					meta.EmbedFilePaths = append(meta.EmbedFilePaths, filePaths...)
 				}
 				pkgPath := templatePkgPath(typesInfo, x)
-				t, err := parseFiles(ts, pkgPath, fm, lDelim, rDelim, filePaths...)
+				t, err := parseFiles(ts, pkgPath, fm, meta, lDelim, rDelim, filePaths...)
 				return t, lDelim, rDelim, err
 			case "Parse":
 				if len(call.Args) != 1 {
 					return nil, lDelim, rDelim, wrapWithFilename(workingDirectory, fileSet, call.Lparen, fmt.Errorf("expected exactly one string literal argument"))
 				}
-				if meta != nil {
-					if bl, ok := call.Args[0].(*ast.BasicLit); ok {
-						meta.ParseCalls = append(meta.ParseCalls, bl)
-					}
-				}
 				sl, err := StringLiteralExpression(workingDirectory, fileSet, call.Args[0])
 				if err != nil {
 					return nil, lDelim, rDelim, err
 				}
+				recordParsedLiteral(meta, call.Args[0], ts.Name(), lDelim, rDelim)
 				t, err := ts.Parse(sl)
 				return t, lDelim, rDelim, err
 			case "Funcs":
@@ -132,7 +155,7 @@ func EvaluateTemplateSelector(ts Template, pkg *types.Package, typesInfo *types.
 			if meta != nil {
 				meta.EmbedFilePaths = append(meta.EmbedFilePaths, filePaths...)
 			}
-			t, err := parseFiles(nil, pkgPath, fm, lDelim, rDelim, filePaths...)
+			t, err := parseFiles(nil, pkgPath, fm, meta, lDelim, rDelim, filePaths...)
 			return t, lDelim, rDelim, err
 		default:
 			return nil, lDelim, rDelim, wrapWithFilename(workingDirectory, fileSet, call.Fun.Pos(), fmt.Errorf("unsupported function %s", sel.Sel.Name))
@@ -156,15 +179,11 @@ func EvaluateTemplateSelector(ts Template, pkg *types.Package, typesInfo *types.
 			if len(call.Args) != 1 {
 				return nil, upLDelim, upRDelim, wrapWithFilename(workingDirectory, fileSet, call.Lparen, fmt.Errorf("expected exactly one string literal argument"))
 			}
-			if meta != nil {
-				if bl, ok := call.Args[0].(*ast.BasicLit); ok {
-					meta.ParseCalls = append(meta.ParseCalls, bl)
-				}
-			}
 			sl, err := StringLiteralExpression(workingDirectory, fileSet, call.Args[0])
 			if err != nil {
 				return nil, upLDelim, upRDelim, err
 			}
+			recordParsedLiteral(meta, call.Args[0], up.Name(), upLDelim, upRDelim)
 			t, err := up.Parse(sl)
 			return t, upLDelim, upRDelim, err
 		case "New":
@@ -184,7 +203,7 @@ func EvaluateTemplateSelector(ts Template, pkg *types.Package, typesInfo *types.
 			if meta != nil {
 				meta.EmbedFilePaths = append(meta.EmbedFilePaths, filePaths...)
 			}
-			t, err := parseFiles(up, "", fm, upLDelim, upRDelim, filePaths...)
+			t, err := parseFiles(up, "", fm, meta, upLDelim, upRDelim, filePaths...)
 			return t, upLDelim, upRDelim, err
 		case "Option":
 			list, err := StringLiteralExpressionList(workingDirectory, fileSet, call.Args)
@@ -305,7 +324,27 @@ func builtins() map[string]any {
 	}
 }
 
-func parseFiles(t Template, pkgPath string, fm map[string]any, leftDelim, rightDelim string, filenames ...string) (Template, error) {
+// recordParsedLiteral notes a Parse call whose argument is a string
+// literal. A call built any other way, such as from concatenation, has no
+// single literal to resolve positions against and is not recorded.
+func recordParsedLiteral(meta *TemplateMetadata, arg ast.Expr, rootName, leftDelim, rightDelim string) {
+	if meta == nil {
+		return
+	}
+	lit, ok := arg.(*ast.BasicLit)
+	if !ok {
+		return
+	}
+	meta.ParseCalls = append(meta.ParseCalls, lit)
+	meta.Sources = append(meta.Sources, ParsedText{
+		RootName:   rootName,
+		Literal:    lit,
+		LeftDelim:  leftDelim,
+		RightDelim: rightDelim,
+	})
+}
+
+func parseFiles(t Template, pkgPath string, fm map[string]any, meta *TemplateMetadata, leftDelim, rightDelim string, filenames ...string) (Template, error) {
 	if len(filenames) == 0 {
 		return nil, fmt.Errorf("template: no files named in call to ParseFiles")
 	}
@@ -332,6 +371,15 @@ func parseFiles(t Template, pkgPath string, fm map[string]any, leftDelim, rightD
 		absoluteFilename, err := filepath.Abs(filename)
 		if err != nil {
 			return nil, err
+		}
+		if meta != nil {
+			meta.Sources = append(meta.Sources, ParsedText{
+				RootName:   templateName,
+				Filename:   absoluteFilename,
+				Text:       s,
+				LeftDelim:  leftDelim,
+				RightDelim: rightDelim,
+			})
 		}
 		for _, tree := range trees {
 			tree.ParseName = absoluteFilename
