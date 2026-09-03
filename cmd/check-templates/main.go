@@ -31,11 +31,13 @@ func main() {
 func run(dir string, args []string, stdout, stderr io.Writer) int {
 	var (
 		verbose      bool
+		definitions  bool
 		outputFormat string
 	)
 
 	flagSet := flag.NewFlagSet("check-templates", flag.ContinueOnError)
 	flagSet.BoolVar(&verbose, "v", false, "show all calls")
+	flagSet.BoolVar(&definitions, "definitions", false, "show where each checked template was defined")
 	flagSet.StringVar(&dir, "C", dir, "change directory")
 	flagSet.StringVar(&outputFormat, "o", "tsv", "output format: tsv or jsonl")
 	if err := flagSet.Parse(args); err != nil {
@@ -49,10 +51,8 @@ func run(dir string, args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintf(stderr, "unsupported output format: %s\n", outputFormat)
 		return 1
 	}
-	if !verbose {
-		stdout = io.Discard
-	}
-	writeCall := writeCallFunc(outputFormat, stdout)
+	writeCall := writeCallFunc(outputFormat, gate(stdout, verbose))
+	writeDefinition := writeDefinitionFunc(outputFormat, gate(stdout, definitions))
 
 	loadArgs := []string{"."}
 	if args := flagSet.Args(); len(args) > 0 {
@@ -84,11 +84,13 @@ func run(dir string, args []string, stdout, stderr io.Writer) int {
 			_, _ = fmt.Fprintln(stderr, e)
 			exitCode = 1
 		}
-		if err := check.Package(pkg, func(node *ast.CallExpr, t *parse.Tree, tp types.Type, _ check.Definition) {
+		if err := check.Package(pkg, func(node *ast.CallExpr, t *parse.Tree, tp types.Type, def check.Definition) {
 			writeCall(fset.Position(node.Pos()), t.Name, tp)
-		}, func(node *parse.TemplateNode, t *parse.Tree, tp types.Type, _ check.Definition) {
+			writeDefinition(def)
+		}, func(node *parse.TemplateNode, t *parse.Tree, tp types.Type, def check.Definition) {
 			loc, _ := t.ErrorContext(node)
 			writeCall(parseLocation(loc), t.Name, tp)
+			writeDefinition(def)
 		}); err != nil {
 			writeCheckError(stderr, err)
 			exitCode = 1
@@ -160,6 +162,75 @@ type callRecord struct {
 	Offset       int    `json:"offset"`
 	TemplateName string `json:"template_name"`
 	DataType     string `json:"data_type"`
+}
+
+// gate returns w when the output it carries was asked for, and a sink
+// otherwise, so each kind of record has its own flag.
+func gate(w io.Writer, enabled bool) io.Writer {
+	if !enabled {
+		return io.Discard
+	}
+	return w
+}
+
+type spanRecord struct {
+	Filename string `json:"filename"`
+	Line     int    `json:"line"`
+	Column   int    `json:"column"`
+	Offset   int    `json:"offset"`
+	Length   int    `json:"length"`
+}
+
+type definitionRecord struct {
+	TemplateName string     `json:"template_name"`
+	Define       spanRecord `json:"define"`
+	End          spanRecord `json:"end"`
+	Name         spanRecord `json:"name"`
+}
+
+func newSpanRecord(s check.Span) spanRecord {
+	return spanRecord{
+		Filename: s.Filename,
+		Line:     s.Line,
+		Column:   s.Column,
+		Offset:   s.Offset,
+		Length:   s.Length,
+	}
+}
+
+// writeDefinitionFunc reports where a checked template was defined,
+// once per template however many times it is invoked.
+func writeDefinitionFunc(outputFormat string, stdout io.Writer) func(def check.Definition) {
+	seen := make(map[string]bool)
+	report := func(def check.Definition) bool {
+		if def.Name == "" || seen[def.Name] {
+			return false
+		}
+		seen[def.Name] = true
+		return true
+	}
+	switch outputFormat {
+	case "jsonl":
+		enc := json.NewEncoder(stdout)
+		return func(def check.Definition) {
+			if !report(def) {
+				return
+			}
+			_ = enc.Encode(definitionRecord{
+				TemplateName: def.Name,
+				Define:       newSpanRecord(def.Define),
+				End:          newSpanRecord(def.End),
+				Name:         newSpanRecord(def.TemplateName),
+			})
+		}
+	default:
+		return func(def check.Definition) {
+			if !report(def) {
+				return
+			}
+			_, _ = fmt.Fprintf(stdout, "%s\t%q\t%s\t%s\n", def.Define, def.Name, def.End, def.TemplateName)
+		}
+	}
 }
 
 func writeCallFunc(outputFormat string, stdout io.Writer) func(pos token.Position, templateName string, dataType types.Type) {

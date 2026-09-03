@@ -1,0 +1,45 @@
+# A template variable can be added to after it is declared. Definitions
+# parsed by those later calls are reported alongside the ones from the
+# declaration.
+
+check-templates -definitions
+stdout 'about\.gohtml:1:1\+21\t"farewell"\t.*about\.gohtml:1:25\+7\t.*about\.gohtml:1:10\+10'
+! stderr .
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- main.go --
+package main
+
+import (
+	"embed"
+	"fmt"
+	"html/template"
+	"io"
+)
+
+//go:embed *.gohtml
+var source embed.FS
+
+type Page struct {
+	Title string
+}
+
+var ts = template.Must(template.New("app").ParseFS(source, "index.gohtml"))
+
+func setup() {
+	template.Must(ts.ParseFS(source, "about.gohtml"))
+}
+
+func render() {
+	_ = ts.ExecuteTemplate(io.Discard, "farewell", Page{Title: "Home"})
+}
+
+var _ = fmt.Sprint
+
+-- index.gohtml --
+<h1>{{.Title}}</h1>
+-- about.gohtml --
+{{define "farewell"}}Bye{{end}}
