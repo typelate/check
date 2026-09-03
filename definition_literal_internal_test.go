@@ -5,6 +5,8 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -48,6 +50,62 @@ func formatGoDef(src string, d Definition) string {
 		formatGoSpan(src, d.TemplateName),
 		formatGoSpan(src, d.End),
 	)
+}
+
+// TestDefinitionsInLiteralLineEndings pins the mapping against a file on
+// disk, because go/scanner drops the carriage returns from a raw string
+// literal's value while token offsets keep addressing the file, so the
+// two only disagree when the bytes really are on disk.
+func TestDefinitionsInLiteralLineEndings(t *testing.T) {
+	const lf = "package p\n\nvar t = x.Parse(`\n{{define \"a\"}}hi{{end}}`)\n"
+
+	for _, tt := range []struct {
+		name string
+		src  string
+	}{
+		{name: "line feed endings", src: lf},
+		{name: "carriage return line feed endings", src: strings.ReplaceAll(lf, "\n", "\r\n")},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "m.go")
+			if err := os.WriteFile(path, []byte(tt.src), 0o600); err != nil {
+				t.Fatalf("writing source: %v", err)
+			}
+			fset := token.NewFileSet()
+			file, err := parser.ParseFile(fset, path, nil, 0)
+			if err != nil {
+				t.Fatalf("parsing source: %v", err)
+			}
+			var lit *ast.BasicLit
+			ast.Inspect(file, func(n ast.Node) bool {
+				if b, ok := n.(*ast.BasicLit); ok && b.Kind == token.STRING && lit == nil {
+					lit = b
+				}
+				return lit == nil
+			})
+
+			var got Definition
+			for _, def := range definitionsInLiteral(fset, lit, "app", "", "") {
+				if def.Name == "a" {
+					got = def
+				}
+			}
+			if !got.Define.IsValid() {
+				t.Fatalf("no definition for %q", "a")
+			}
+			// Slicing the source by the span is the assertion: whatever
+			// the line endings, a span has to cover its own clause.
+			if covers := tt.src[got.Define.Offset : got.Define.Offset+got.Define.Length]; covers != `{{define "a"}}` {
+				t.Errorf("Define covers %q, want %q", covers, `{{define "a"}}`)
+			}
+			if covers := tt.src[got.End.Offset : got.End.Offset+got.End.Length]; covers != "{{end}}" {
+				t.Errorf("End covers %q, want %q", covers, "{{end}}")
+			}
+			if covers := tt.src[got.TemplateName.Offset : got.TemplateName.Offset+got.TemplateName.Length]; covers != `"a"` {
+				t.Errorf("TemplateName covers %q, want %q", covers, `"a"`)
+			}
+		})
+	}
 }
 
 func TestDefinitionsInLiteral(t *testing.T) {
