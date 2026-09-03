@@ -6,15 +6,11 @@
 # through a {{template}} node, so both inspectors are exercised.
 
 check-templates -definitions
-stdout 'index\.gohtml:1:1\+21\t"greeting"\t.*index\.gohtml:1:46\+7\t.*index\.gohtml:1:10\+10'
-stdout 'index\.gohtml:2:1\+17\t"name"\t.*index\.gohtml:2:28\+7\t.*index\.gohtml:2:10\+6'
+cmpenv stdout want.txt
 ! stderr .
 
 check-templates -definitions -o jsonl
-stdout '"template_name":"greeting"'
-stdout '"define":\{"filename":".*index\.gohtml","line":1,"column":1,"offset":0,"length":21\}'
-stdout '"end":\{"filename":".*index\.gohtml","line":1,"column":46,"offset":45,"length":7\}'
-stdout '"name":\{"filename":".*index\.gohtml","line":1,"column":10,"offset":9,"length":10\}'
+cmpenv stdout want-jsonl.txt
 ! stderr .
 
 # Without the flag nothing is written.
@@ -22,6 +18,12 @@ check-templates
 ! stdout .
 ! stderr .
 
+-- want.txt --
+$WORK/index.gohtml:1:1+21	"greeting"	$WORK/index.gohtml:1:46+7	$WORK/index.gohtml:1:10+10
+$WORK/index.gohtml:2:1+17	"name"	$WORK/index.gohtml:2:28+7	$WORK/index.gohtml:2:10+6
+-- want-jsonl.txt --
+{"template_name":"greeting","define":{"filename":"$WORK/index.gohtml","line":1,"column":1,"offset":0,"length":21},"end":{"filename":"$WORK/index.gohtml","line":1,"column":46,"offset":45,"length":7},"name":{"filename":"$WORK/index.gohtml","line":1,"column":10,"offset":9,"length":10}}
+{"template_name":"name","define":{"filename":"$WORK/index.gohtml","line":2,"column":1,"offset":53,"length":17},"end":{"filename":"$WORK/index.gohtml","line":2,"column":28,"offset":80,"length":7},"name":{"filename":"$WORK/index.gohtml","line":2,"column":10,"offset":62,"length":6}}
 -- go.mod --
 module example.com/app
 

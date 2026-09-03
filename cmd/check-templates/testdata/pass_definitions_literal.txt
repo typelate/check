@@ -3,9 +3,11 @@
 # not an offset inside the template text.
 
 check-templates -definitions
-stdout 'main\.go:9:58\+21\t"greeting"\t.*main\.go:9:81\+7\t.*main\.go:9:67\+10'
+cmpenv stdout want.txt
 ! stderr .
 
+-- want.txt --
+$WORK/main.go:9:58+21	"greeting"	$WORK/main.go:9:81+7	$WORK/main.go:9:67+10
 -- go.mod --
 module example.com/app
 
