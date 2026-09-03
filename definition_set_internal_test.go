@@ -82,6 +82,47 @@ func TestDefinitionSet(t *testing.T) {
 		}
 	})
 
+	t.Run("the surviving definition carries the tree the checker walks", func(t *testing.T) {
+		// Definitions are built from a reparse, which is only good for
+		// deciding which of them survives: those trees are not the ones
+		// the checker walks and carry a different ParseName. Once the
+		// winner is known it has to hold the executed tree, or a caller
+		// following Definition.Tree reports a different file than
+		// Definition.Define does.
+		reparsed := defineTree(t, "first")
+		executed := defineTree(t, "first")
+		executed.ParseName = "/abs/path/a.gohtml"
+
+		set := newDefinitionSet([]Definition{definitionOnLine(1, reparsed)})
+		set.adoptTrees(FindTreeFunc(func(name string) (*parse.Tree, bool) {
+			if name != "a" {
+				return nil, false
+			}
+			return executed, true
+		}))
+
+		got, _ := set.FindDefinition("a")
+		if got.Tree != executed {
+			t.Errorf("FindDefinition(%q).Tree is the reparsed tree, want the executed one", "a")
+		}
+		if got.Tree.ParseName != "/abs/path/a.gohtml" {
+			t.Errorf("FindDefinition(%q).Tree.ParseName = %q, want %q",
+				"a", got.Tree.ParseName, "/abs/path/a.gohtml")
+		}
+	})
+
+	t.Run("a definition the template set does not know keeps its own tree", func(t *testing.T) {
+		reparsed := defineTree(t, "first")
+
+		set := newDefinitionSet([]Definition{definitionOnLine(1, reparsed)})
+		set.adoptTrees(FindTreeFunc(func(string) (*parse.Tree, bool) { return nil, false }))
+
+		got, _ := set.FindDefinition("a")
+		if got.Tree != reparsed {
+			t.Errorf("FindDefinition(%q).Tree was replaced with nil, want the reparsed tree kept", "a")
+		}
+	})
+
 	t.Run("an unknown name is not found", func(t *testing.T) {
 		set := newDefinitionSet([]Definition{definitionOnLine(1, defineTree(t, "first"))})
 

@@ -52,8 +52,10 @@ type Definition struct {
 	// included. It is invalid for a template that has no define clause.
 	TemplateName Span
 
-	// Tree is the defined template's parse tree, saving a caller a
-	// second lookup. It is nil in a zero Definition.
+	// Tree is the defined template's parse tree, the same one the
+	// checker walks, saving a caller a second lookup. It is nil in a
+	// zero Definition, and for a definition the template set does not
+	// know it is a reparse of the source the definition was written in.
 	Tree *parse.Tree
 }
 
@@ -77,6 +79,31 @@ func newDefinitionSet(ordered []Definition) definitionSet {
 func (s definitionSet) FindDefinition(name string) (Definition, bool) {
 	def, ok := s[name]
 	return def, ok
+}
+
+// adoptTrees replaces each definition's tree with the one trees holds for
+// that name.
+//
+// Definitions are built from a reparse of the source each was written
+// in, which is what makes it possible to tell which of several
+// definitions of a name survived. Those trees are not the ones the
+// checker walks, though: they carry the template's name as their
+// ParseName where the executed tree carries the file path. Once the
+// surviving definition is known, it takes the executed tree, so that
+// following Definition.Tree and reading Definition.Define agree about
+// which file the template came from.
+//
+// A name the template set does not know keeps the tree it was built
+// with, since nothing better is available.
+func (s definitionSet) adoptTrees(trees TreeFinder) {
+	for name, def := range s {
+		tree, ok := trees.FindTree(name)
+		if !ok {
+			continue
+		}
+		def.Tree = tree
+		s[name] = def
+	}
 }
 
 // displaces reports whether next replaces prev, following the rule

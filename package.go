@@ -45,9 +45,9 @@ func definitionsFor(fset *token.FileSet, sources []asteval.ParsedText) []Definit
 // ExecuteTemplateNodeInspectorFunc is called for each ExecuteTemplate
 // call that resolves to a known template.
 //
-// The tree is the invoked template's own tree, so it equals def.Tree. The
-// type is the data argument's type, and def locates where the template
-// was defined.
+// The tree is the invoked template's own tree, the same one def.Tree
+// holds. The type is the data argument's type, and def locates where the
+// template was defined.
 type ExecuteTemplateNodeInspectorFunc func(node *ast.CallExpr, t *parse.Tree, tp types.Type, def Definition)
 
 // Package discovers all .ExecuteTemplate calls in the given package,
@@ -248,6 +248,7 @@ func checkCalls(pkg *packages.Package, pending []pendingCall, resolved map[types
 			mergedFunctions[name] = sig
 		}
 		rt.definitions = newDefinitionSet(definitionsFor(pkg.Fset, rt.metadata.Sources))
+		rt.definitions.adoptTrees(rt.templates)
 	}
 
 	var errs []error
