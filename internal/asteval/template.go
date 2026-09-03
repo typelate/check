@@ -66,7 +66,11 @@ type ParsedText struct {
 	RightDelim string
 }
 
-func EvaluateTemplateSelector(ts Template, pkg *types.Package, typesInfo *types.Info, expression ast.Expr, workingDirectory, templatesVariable, rDelim, lDelim string, fileSet *token.FileSet, files []*ast.File, embeddedPaths []string, funcTypeMaps TemplateFunctions, fm map[string]any, meta *TemplateMetadata) (Template, string, string, error) {
+// EvaluateTemplateSelector walks a template construction expression and
+// reports the template it builds along with the delimiters left in
+// effect, which a caller continuing the chain in a later statement has
+// to pass back in. Delimiters are given and returned left first.
+func EvaluateTemplateSelector(ts Template, pkg *types.Package, typesInfo *types.Info, expression ast.Expr, workingDirectory, templatesVariable, lDelim, rDelim string, fileSet *token.FileSet, files []*ast.File, embeddedPaths []string, funcTypeMaps TemplateFunctions, fm map[string]any, meta *TemplateMetadata) (Template, string, string, error) {
 	call, ok := expression.(*ast.CallExpr)
 	if !ok {
 		return nil, lDelim, rDelim, wrapWithFilename(workingDirectory, fileSet, expression.Pos(), fmt.Errorf("expected call expression"))
@@ -137,7 +141,7 @@ func EvaluateTemplateSelector(ts Template, pkg *types.Package, typesInfo *types.
 			if len(call.Args) != 1 {
 				return nil, lDelim, rDelim, wrapWithFilename(workingDirectory, fileSet, call.Lparen, fmt.Errorf("expected exactly one argument %s got %d", astgen.Format(sel.X), len(call.Args)))
 			}
-			return EvaluateTemplateSelector(ts, pkg, typesInfo, call.Args[0], workingDirectory, templatesVariable, rDelim, lDelim, fileSet, files, embeddedPaths, funcTypeMaps, fm, meta)
+			return EvaluateTemplateSelector(ts, pkg, typesInfo, call.Args[0], workingDirectory, templatesVariable, lDelim, rDelim, fileSet, files, embeddedPaths, funcTypeMaps, fm, meta)
 		case "New":
 			if len(call.Args) != 1 {
 				return nil, lDelim, rDelim, wrapWithFilename(workingDirectory, fileSet, call.Lparen, fmt.Errorf("expected exactly one string literal argument"))
@@ -161,7 +165,7 @@ func EvaluateTemplateSelector(ts Template, pkg *types.Package, typesInfo *types.
 			return nil, lDelim, rDelim, wrapWithFilename(workingDirectory, fileSet, call.Fun.Pos(), fmt.Errorf("unsupported function %s", sel.Sel.Name))
 		}
 	case *ast.CallExpr:
-		up, upLDelim, upRDelim, err := EvaluateTemplateSelector(ts, pkg, typesInfo, sel.X, workingDirectory, templatesVariable, rDelim, lDelim, fileSet, files, embeddedPaths, funcTypeMaps, fm, meta)
+		up, upLDelim, upRDelim, err := EvaluateTemplateSelector(ts, pkg, typesInfo, sel.X, workingDirectory, templatesVariable, lDelim, rDelim, fileSet, files, embeddedPaths, funcTypeMaps, fm, meta)
 		if err != nil {
 			return nil, lDelim, rDelim, err
 		}
