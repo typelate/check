@@ -130,7 +130,7 @@ func TestTree(t *testing.T) {
 				require.NotNil(t, method)
 				methodPos := testPkg.Fset.Position(method.Pos())
 
-				require.EqualError(t, err, `template:1:2: executing "template" at <.Method>: function Method has 0 return values; should be 1 or 2`)
+				require.EqualError(t, err, `template:1:3: executing "template" at <.Method>: function Method has 0 return values; should be 1 or 2`)
 				require.Equal(t, methodPos, findLeafError(t, err).Decl)
 			},
 		},
@@ -153,7 +153,7 @@ func TestTree(t *testing.T) {
 				require.NotNil(t, method)
 				methodPos := testPkg.Fset.Position(method.Pos())
 
-				require.EqualError(t, err, `template:1:2: executing "template" at <.Method>: invalid function signature for Method: second return value should be error; is int`)
+				require.EqualError(t, err, `template:1:3: executing "template" at <.Method>: invalid function signature for Method: second return value should be error; is int`)
 				require.Equal(t, methodPos, findLeafError(t, err).Decl)
 			},
 		},
@@ -166,7 +166,7 @@ func TestTree(t *testing.T) {
 				require.NotNil(t, method)
 				methodPos := testPkg.Fset.Position(method.Pos())
 
-				require.EqualError(t, err, `template:1:2: executing "template" at <.Method>: function Method has 3 return values; should be 1 or 2`)
+				require.EqualError(t, err, `template:1:3: executing "template" at <.Method>: function Method has 3 return values; should be 1 or 2`)
 				require.Equal(t, methodPos, findLeafError(t, err).Decl)
 			},
 		},
@@ -186,7 +186,7 @@ func TestTree(t *testing.T) {
 				require.NotNil(t, m2)
 				methodPos := testPkg.Fset.Position(m2.Pos())
 
-				require.EqualError(t, err, `template:1:9: executing "template" at <.Method.Method>: function Method has 0 return values; should be 1 or 2`)
+				require.EqualError(t, err, `template:1:10: executing "template" at <.Method.Method>: function Method has 0 return values; should be 1 or 2`)
 				require.Equal(t, methodPos, findLeafError(t, err).Decl)
 			},
 		},
@@ -214,7 +214,7 @@ func TestTree(t *testing.T) {
 			Error: func(t *testing.T, err, _ error, tp types.Type) {
 				fn, _, _ := types.LookupFieldOrMethod(tp, true, testPkg.Types, "Func")
 				require.NotNil(t, fn)
-				require.ErrorContains(t, err, fmt.Sprintf(`template:1:7: executing "template" at <.Func.Method>: identifier chain not supported for type %s`, fn.Type()))
+				require.ErrorContains(t, err, fmt.Sprintf(`template:1:8: executing "template" at <.Func.Method>: identifier chain not supported for type %s`, fn.Type()))
 			},
 		},
 		{
@@ -783,7 +783,7 @@ func TestTree(t *testing.T) {
 			Data:     nil,
 			Error: func(t *testing.T, checkErr, execErr error, tp types.Type) {
 				assert.NoError(t, execErr)
-				require.ErrorContains(t, checkErr, `template:1:8: executing "template" at <.Unknown>: field or method Unknown not found on untyped nil`)
+				require.ErrorContains(t, checkErr, `template:1:9: executing "template" at <.Unknown>: field or method Unknown not found on untyped nil`)
 				require.Contains(t, detailedError(t, checkErr), "no exported fields or methods")
 			},
 		},
@@ -793,7 +793,7 @@ func TestTree(t *testing.T) {
 			Data:     nil,
 			Error: func(t *testing.T, checkErr, execErr error, tp types.Type) {
 				assert.NoError(t, execErr)
-				require.ErrorContains(t, checkErr, `template:1:7: executing "template" at <.Unknown>: field or method Unknown not found on untyped nil`)
+				require.ErrorContains(t, checkErr, `template:1:8: executing "template" at <.Unknown>: field or method Unknown not found on untyped nil`)
 				require.Contains(t, detailedError(t, checkErr), "no exported fields or methods")
 			},
 		},
@@ -923,9 +923,37 @@ func detailedError(t *testing.T, err error) string {
 	return sb.String()
 }
 
+// convertTextExecError renders the error text/template itself reported
+// when executing a template, so that the error check reports for the same
+// template can be held to it.
+//
+// Only the column is allowed to differ. text/template reports the zero
+// based column parse.Tree.ErrorContext produces; check counts from one so
+// its positions read like go/token positions. Every other part of the
+// message still has to match exactly.
 func convertTextExecError(t *testing.T, err error) string {
 	require.Error(t, err)
-	return strings.TrimPrefix(err.Error(), "template: ")
+	return shiftErrorColumn(strings.TrimPrefix(err.Error(), "template: "))
+}
+
+// shiftErrorColumn moves the column in a leading "name:line:column: "
+// location forward by one.
+func shiftErrorColumn(message string) string {
+	location, rest, ok := strings.Cut(message, ": ")
+	if !ok {
+		return message
+	}
+	// The template name may contain colons, so take the column from the
+	// right.
+	i := strings.LastIndex(location, ":")
+	if i < 0 {
+		return message
+	}
+	column, err := strconv.Atoi(location[i+1:])
+	if err != nil {
+		return message
+	}
+	return location[:i+1] + strconv.Itoa(column+1) + ": " + rest
 }
 
 func treeTestRowType(t *testing.T, p *packages.Package, ttRows *ast.CompositeLit, name string) types.Type {

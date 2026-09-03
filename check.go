@@ -226,8 +226,29 @@ func (e *Error) line(tf typeFormatFunc) string {
 	if e.Tree == nil || e.Node == nil {
 		return message
 	}
-	loc, ctx := e.Tree.ErrorContext(e.Node)
+	loc, ctx := errorLocation(e.Tree, e.Node)
 	return fmt.Sprintf("%s: executing %q at <%s>: %s", loc, e.Tree.Name, ctx, message)
+}
+
+// errorLocation reports where node sits, as ParseName:line:column, along
+// with the source context.
+//
+// parse.Tree.ErrorContext counts columns from zero. This counts from one,
+// so a position in a template reads the same way as one in a Go file and
+// an editor told to jump there lands on the right byte.
+func errorLocation(tree *parse.Tree, node parse.Node) (location, context string) {
+	loc, ctx := tree.ErrorContext(node)
+	// ParseName may itself contain colons, such as a Windows path, so
+	// take the column from the right.
+	i := strings.LastIndex(loc, ":")
+	if i < 0 {
+		return loc, ctx
+	}
+	column, err := strconv.Atoi(loc[i+1:])
+	if err != nil {
+		return loc, ctx
+	}
+	return loc[:i+1] + strconv.Itoa(column+1), ctx
 }
 
 // messageWith renders the cause message through tf when the error (or its
@@ -348,7 +369,7 @@ func (e *Error) VerboseError() string {
 	}
 	var prefix string
 	if e.Tree != nil && e.Node != nil {
-		loc, ctx := e.Tree.ErrorContext(e.Node)
+		loc, ctx := errorLocation(e.Tree, e.Node)
 		prefix = fmt.Sprintf("%s: executing %q at <%s>: ", loc, e.Tree.Name, ctx)
 	}
 	v, ok := errors.AsType[VerboseErrorer](e.err)
