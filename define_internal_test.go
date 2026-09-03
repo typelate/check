@@ -74,6 +74,24 @@ func TestScanDefinitions(t *testing.T) {
 			want: []string{`"a" define="{{define \"a\"}}"@0 name="\"a\""@9 end="{{end}}"@52`},
 		},
 		{
+			// The template lexer ends an identifier at the first byte
+			// that cannot continue one, so these open a block just as
+			// {{if .X}} does and must consume their own end clause.
+			name: "a block keyword followed immediately by a field",
+			text: `{{define "a"}}{{if.X}}y{{end}}{{end}}`,
+			want: []string{`"a" define="{{define \"a\"}}"@0 name="\"a\""@9 end="{{end}}"@30`},
+		},
+		{
+			name: "a range keyword followed immediately by a field",
+			text: `{{define "a"}}{{range.X}}y{{end}}{{end}}`,
+			want: []string{`"a" define="{{define \"a\"}}"@0 name="\"a\""@9 end="{{end}}"@33`},
+		},
+		{
+			name: "a block keyword followed immediately by a parenthesis",
+			text: `{{define "a"}}{{if(eq 1 1)}}y{{end}}{{end}}`,
+			want: []string{`"a" define="{{define \"a\"}}"@0 name="\"a\""@9 end="{{end}}"@36`},
+		},
+		{
 			name: "a right delimiter inside a quoted argument is not a delimiter",
 			text: `{{define "a"}}{{if eq .X "}}"}}y{{end}}{{end}}`,
 			want: []string{`"a" define="{{define \"a\"}}"@0 name="\"a\""@9 end="{{end}}"@39`},
