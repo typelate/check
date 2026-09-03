@@ -1,0 +1,47 @@
+# Losing the delimiters between statements does not only cost positions,
+# it costs the check itself: a file parsed with the wrong delimiters has
+# no actions in it at all, so nothing is left to type check and a real
+# mistake goes unreported.
+#
+# Here Delims is set on the declaration and ParseFS runs in a function,
+# so the delimiters have to survive between the two for [[.Missing]] to
+# be seen as an action.
+
+! check-templates
+stderr 'index\.gohtml:1:3: executing "index\.gohtml" at <\.Missing>: field or method Missing not found on example\.com/app\.Page'
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- main.go --
+package main
+
+import (
+	"embed"
+	"fmt"
+	"html/template"
+	"io"
+)
+
+//go:embed *.gohtml
+var source embed.FS
+
+var templates = template.New("app").Delims("[[", "]]")
+
+func setup() {
+	template.Must(templates.ParseFS(source, "*"))
+}
+
+type Page struct {
+	Title string
+}
+
+func render() {
+	_ = templates.ExecuteTemplate(io.Discard, "index.gohtml", Page{Title: "Home"})
+}
+
+var _ = fmt.Sprint
+
+-- index.gohtml --
+[[.Missing]]

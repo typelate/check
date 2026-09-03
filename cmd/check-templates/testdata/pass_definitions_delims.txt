@@ -1,0 +1,37 @@
+# Delims may be set in one statement and the template parsed in another.
+# The delimiters in effect have to carry across, or the scan looks for
+# {{ }} in a template written with [[ ]], finds no clause, and reports
+# nothing at all while the check itself still passes.
+
+check-templates -definitions
+cmpenv stdout want.txt
+! stderr .
+
+-- want.txt --
+$WORK/main.go:11:40+21	"greeting"	$WORK/main.go:11:63+7	$WORK/main.go:11:49+10
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- main.go --
+package main
+
+import (
+	"fmt"
+	"html/template"
+	"net/http"
+)
+
+var templates = template.New("app").Delims("[[", "]]")
+
+var _ = template.Must(templates.Parse(`[[define "greeting"]]Hi[[end]]`))
+
+type Page struct {
+	Title string
+}
+
+func handleIndex(w http.ResponseWriter, r *http.Request) {
+	_ = templates.ExecuteTemplate(w, "greeting", Page{Title: "Home"})
+}
+
+var _ = fmt.Sprint
