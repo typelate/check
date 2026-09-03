@@ -197,7 +197,7 @@ func TestError_DetailedError(t *testing.T) {
 		require.NoError(t, e.DetailedError(&sb, webQualifier))
 		detail := sb.String()
 
-		require.Contains(t, detail, `detail.gohtml:1:2: executing "detail.gohtml" at <.Missing>: field or method Missing not found on web.Page`,
+		require.Contains(t, detail, `detail.gohtml:1:3: executing "detail.gohtml" at <.Missing>: field or method Missing not found on web.Page`,
 			"the message line should qualify types with the passed qualifier")
 		require.NotContains(t, detail, "example.com/web",
 			"no line should fall back to the construction-time qualifier")

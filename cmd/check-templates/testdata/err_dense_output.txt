@@ -3,9 +3,9 @@
 # error lines, no matter how many errors mention it.
 
 ! check-templates
-stderr 'index\.gohtml:1:6: executing "index\.gohtml" at <\.Heading>: field or method Heading not found on example\.com/app\.IndexPage'
-stderr 'index\.gohtml:1:23: executing "index\.gohtml" at <\.Missing>: field or method Missing not found on example\.com/app\.IndexPage'
-stderr 'index\.gohtml:1:41: executing "index\.gohtml" at <\.Title\.Bad>: field or method Bad not found on string'
+stderr 'index\.gohtml:1:7: executing "index\.gohtml" at <\.Heading>: field or method Heading not found on example\.com/app\.IndexPage'
+stderr 'index\.gohtml:1:24: executing "index\.gohtml" at <\.Missing>: field or method Missing not found on example\.com/app\.IndexPage'
+stderr 'index\.gohtml:1:42: executing "index\.gohtml" at <\.Title\.Bad>: field or method Bad not found on string'
 stderr -count=1 'type IndexPage struct \{'
 stderr 'field or method Heading not found on example\.com/app\.IndexPage \(declared at .*main\.go:17:6\)'
 ! stderr 'type: string'
