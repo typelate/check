@@ -198,15 +198,26 @@ func newSpanRecord(s check.Span) spanRecord {
 	}
 }
 
-// writeDefinitionFunc reports where a checked template was defined,
-// once per template however many times it is invoked.
+// writeDefinitionFunc reports where a checked template was defined, once
+// per definition however many times it is invoked.
+//
+// Definitions are told apart by where they are, not by what they are
+// called: separate template sets may each define a template of the same
+// name, and reporting only the first would attribute one set's
+// definition to the other set's call.
 func writeDefinitionFunc(outputFormat string, stdout io.Writer) func(def check.Definition) {
 	seen := make(map[string]bool)
 	report := func(def check.Definition) bool {
-		if def.Name == "" || seen[def.Name] {
+		// A template that was never defined, or whose definition could
+		// not be located, has nothing to report.
+		if !def.Define.IsValid() {
 			return false
 		}
-		seen[def.Name] = true
+		at := def.Define.String() + "\x00" + def.Name
+		if seen[at] {
+			return false
+		}
+		seen[at] = true
 		return true
 	}
 	switch outputFormat {

@@ -1,0 +1,43 @@
+# Two template sets may each define a template of the same name. Both
+# definitions are reported: collapsing them by name alone would attribute
+# one set's definition to the other set's call.
+#
+# The two calls are listed in source order, and each name is reported
+# once per definition site rather than once per call.
+
+check-templates -definitions
+cmpenv stdout want.txt
+! stderr .
+
+-- want.txt --
+$WORK/main.go:9:56+16	"row"	$WORK/main.go:9:77+7	$WORK/main.go:9:65+5
+$WORK/main.go:10:58+16	"row"	$WORK/main.go:10:80+7	$WORK/main.go:10:67+5
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- main.go --
+package main
+
+import (
+	"fmt"
+	"html/template"
+	"net/http"
+)
+
+var admin = template.Must(template.New("admin").Parse(`{{define "row"}}ADMIN{{end}}`))
+var public = template.Must(template.New("public").Parse(`{{define "row"}}PUBLIC{{end}}`))
+
+type Page struct {
+	Title string
+}
+
+func handleAdmin(w http.ResponseWriter, r *http.Request) {
+	_ = admin.ExecuteTemplate(w, "row", Page{Title: "Home"})
+}
+
+func handlePublic(w http.ResponseWriter, r *http.Request) {
+	_ = public.ExecuteTemplate(w, "row", Page{Title: "Home"})
+}
+
+var _ = fmt.Sprint
