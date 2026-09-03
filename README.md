@@ -27,6 +27,8 @@ Call `Execute` with a `types.Type` for the template's data (`.`) and the templat
 
 A `Span` embeds a `token.Position` and adds a byte `Length`, so it reports a file, line, column, offset and length with the same semantics as `go/token`. Note that `parse.Tree.ErrorContext` counts columns from zero instead, so the two differ by one.
 
+`IsBlock` reports whether a `{{block}}` clause defined the template rather than a `{{define}}`, and `BlockPipeline` returns the pipeline that clause passes. `text/template` rejects a block written without one, so the pipeline's presence is what distinguishes the two.
+
 Positions address real bytes in a real file. A template read by `ParseFS` resolves against the template file. A template written as a Go string literal resolves against the `.go` file holding it, with escape sequences accounted for, so `{{define \"x\"}}` reports the width of the escaped source rather than of the decoded text. A template file's own root template has no define clause, so it spans the whole file.
 
 When a name is defined more than once, `Definition` reports the one that survived, applying the same rule `text/template` does: an empty definition does not displace one that already has a body.

@@ -59,7 +59,23 @@ type Definition struct {
 	// zero Definition, and for a definition the template set does not
 	// know it is a reparse of the source the definition was written in.
 	Tree *parse.Tree
+
+	// blockPipeline is the pipeline a block clause passes to the
+	// template it defines, and is nil for every other definition. A
+	// block clause cannot be written without one — text/template
+	// rejects {{block "b"}} as a missing value — so its presence is
+	// what tells a block from a define.
+	blockPipeline *parse.PipeNode
 }
+
+// IsBlock reports whether a block clause defined this template, rather
+// than a define clause.
+func (d Definition) IsBlock() bool { return d.blockPipeline != nil }
+
+// BlockPipeline returns the pipeline the block clause passes to the
+// template it defines, or nil when the template was not defined by a
+// block clause.
+func (d Definition) BlockPipeline() *parse.PipeNode { return d.blockPipeline }
 
 // definitionSet resolves a template name to the definition that survived
 // being defined more than once.
@@ -181,6 +197,7 @@ func literalSource(file *token.File, lit *ast.BasicLit) (string, bool) {
 // with a define or block clause follow in source order.
 func definitions(src source, rootName, text, leftDelim, rightDelim string) []Definition {
 	trees := parseTrees(rootName, text, leftDelim, rightDelim)
+	pipelines := blockPipelines(trees)
 	defs := []Definition{{
 		Name:   rootName,
 		Define: src.span(lex.Span{Off: 0}),
@@ -189,14 +206,64 @@ func definitions(src source, rootName, text, leftDelim, rightDelim string) []Def
 	}}
 	for _, d := range lex.Definitions(text, leftDelim, rightDelim) {
 		defs = append(defs, Definition{
-			Name:         d.Name,
-			Define:       src.span(d.Define),
-			End:          src.span(d.End),
-			TemplateName: src.span(d.NameLiteral),
-			Tree:         trees[d.Name],
+			Name:          d.Name,
+			Define:        src.span(d.Define),
+			End:           src.span(d.End),
+			TemplateName:  src.span(d.NameLiteral),
+			Tree:          trees[d.Name],
+			blockPipeline: pipelines[d.NameLiteral.Off],
 		})
 	}
 	return defs
+}
+
+// blockPipelines maps the offset of a block clause's name literal to the
+// pipeline that clause passes.
+//
+// parse rewrites a block into two things: a tree for its body, and an
+// invocation of that tree in the clause's enclosing tree. The invocation
+// carries the pipeline and sits at the name literal the block was
+// written with, which is what pairs it back up with the clause the
+// scanner found. A define clause leaves no such invocation, so a name
+// literal with no entry here belongs to one.
+func blockPipelines(trees map[string]*parse.Tree) map[int]*parse.PipeNode {
+	pipelines := make(map[int]*parse.PipeNode)
+	var walk func(parse.Node)
+	walk = func(n parse.Node) {
+		switch v := n.(type) {
+		case *parse.ListNode:
+			// A branch's else list is nil when it has no else, and the
+			// nil arrives here typed, so it needs testing here rather
+			// than against the interface.
+			if v == nil {
+				return
+			}
+			for _, child := range v.Nodes {
+				walk(child)
+			}
+		case *parse.IfNode:
+			walk(v.List)
+			walk(v.ElseList)
+		case *parse.RangeNode:
+			walk(v.List)
+			walk(v.ElseList)
+		case *parse.WithNode:
+			walk(v.List)
+			walk(v.ElseList)
+		case *parse.TemplateNode:
+			if v.Pipe != nil {
+				pipelines[int(v.Pos)] = v.Pipe
+			}
+		}
+	}
+	// A block nested in another block is invoked from that block's tree
+	// rather than the root, so every tree has to be walked.
+	for _, tree := range trees {
+		if tree != nil {
+			walk(tree.Root)
+		}
+	}
+	return pipelines
 }
 
 // parseTrees reparses text to recover each defined template's own parse
