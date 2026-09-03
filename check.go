@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"text/template/parse"
+
+	"github.com/typelate/check/internal/lex"
 )
 
 // ErrorType classifies the failure a *Error reports. It lets tools such as
@@ -231,24 +233,15 @@ func (e *Error) line(tf typeFormatFunc) string {
 }
 
 // errorLocation reports where node sits, as ParseName:line:column, along
-// with the source context.
-//
-// parse.Tree.ErrorContext counts columns from zero. This counts from one,
-// so a position in a template reads the same way as one in a Go file and
-// an editor told to jump there lands on the right byte.
+// with the source context. The column counts from one, unlike the one
+// parse.Tree.ErrorContext reports; see lex.Position.
 func errorLocation(tree *parse.Tree, node parse.Node) (location, context string) {
 	loc, ctx := tree.ErrorContext(node)
-	// ParseName may itself contain colons, such as a Windows path, so
-	// take the column from the right.
-	i := strings.LastIndex(loc, ":")
-	if i < 0 {
+	pos := lex.Position(loc)
+	if !pos.IsValid() {
 		return loc, ctx
 	}
-	column, err := strconv.Atoi(loc[i+1:])
-	if err != nil {
-		return loc, ctx
-	}
-	return loc[:i+1] + strconv.Itoa(column+1), ctx
+	return pos.String(), ctx
 }
 
 // messageWith renders the cause message through tf when the error (or its

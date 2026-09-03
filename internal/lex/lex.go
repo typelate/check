@@ -1,4 +1,13 @@
-package check
+// Package lex reads the parts of a template that text/template/parse
+// keeps to itself.
+//
+// A parse.Tree records where a template's body begins but not where the
+// clause that opened it was written, and drops the matching {{end}}
+// altogether, so a tool that wants to point at a definition has to find
+// the clauses itself. Definitions does that by walking template actions.
+// Position reads back the location strings parse.Tree.ErrorContext hands
+// out.
+package lex
 
 import (
 	"strconv"
@@ -13,42 +22,45 @@ const (
 	trimMarker        = '-'
 )
 
-// textSpan is a byte range within template text. An Off below zero marks
-// an absent range.
-type textSpan struct {
+// Span is a byte range within template text, relative to the start of
+// the text it was scanned from. An Off below zero marks an absent range.
+type Span struct {
 	Off int
 	Len int
 }
 
-// invalidSpan marks a range that could not be located.
-var invalidSpan = textSpan{Off: -1}
+// IsValid reports whether the span locates anything.
+func (s Span) IsValid() bool { return s.Off >= 0 }
 
-// definition locates a template definition within the text it was parsed
-// from. Offsets are relative to the start of that text.
-type definition struct {
+// invalidSpan marks a range that could not be located.
+var invalidSpan = Span{Off: -1}
+
+// Clause locates one template definition: the clause that opens it, the
+// quoted name inside that clause, and the clause that closes it.
+type Clause struct {
 	// Name is the defined template's name.
 	Name string
 	// Define spans the {{define ...}} or {{block ...}} clause, from the
 	// left delimiter through the right delimiter, trim markers included.
-	Define textSpan
-	// NameLit spans the quoted name literal inside Define, quotes
+	Define Span
+	// NameLiteral spans the quoted name literal inside Define, quotes
 	// included.
-	NameLit textSpan
+	NameLiteral Span
 	// End spans the matching {{end}} clause.
-	End textSpan
+	End Span
 }
 
 // action is one delimited clause located in template text.
 type action struct {
-	span textSpan
+	span Span
 	// keyword is the clause's leading word, empty for a comment.
 	keyword string
-	nameLit textSpan
+	nameLit Span
 	name    string
 }
 
-// scanDefinitions locates every define and block clause in text along
-// with the {{end}} clause that closes it, in source order.
+// Definitions locates every define and block clause in text along with
+// the {{end}} clause that closes it, in source order.
 //
 // Scanning is delimiter-aware rather than a plain search: quoted
 // arguments may contain delimiters ({{if eq .X "}}"}}) and comments may
@@ -57,26 +69,26 @@ type action struct {
 //
 // Empty delimiters select the template defaults. A definition left open
 // by malformed input keeps an invalid End.
-func scanDefinitions(text, left, right string) []definition {
-	if left == "" {
-		left = defaultLeftDelim
+func Definitions(text, leftDelim, rightDelim string) []Clause {
+	if leftDelim == "" {
+		leftDelim = defaultLeftDelim
 	}
-	if right == "" {
-		right = defaultRightDelim
+	if rightDelim == "" {
+		rightDelim = defaultRightDelim
 	}
 
 	var (
-		defs []definition
+		defs []Clause
 		// open holds an index into defs for each enclosing define or
 		// block clause, and -1 for any other clause that {{end}} closes.
 		open []int
 	)
 	for pos := 0; pos < len(text); {
-		i := strings.Index(text[pos:], left)
+		i := strings.Index(text[pos:], leftDelim)
 		if i < 0 {
 			break
 		}
-		a, ok := scanAction(text, pos+i, left, right)
+		a, ok := scanAction(text, pos+i, leftDelim, rightDelim)
 		if !ok {
 			break
 		}
@@ -84,11 +96,11 @@ func scanDefinitions(text, left, right string) []definition {
 
 		switch a.keyword {
 		case "define", "block":
-			defs = append(defs, definition{
-				Name:    a.name,
-				Define:  a.span,
-				NameLit: a.nameLit,
-				End:     invalidSpan,
+			defs = append(defs, Clause{
+				Name:        a.name,
+				Define:      a.span,
+				NameLiteral: a.nameLit,
+				End:         invalidSpan,
 			})
 			open = append(open, len(defs)-1)
 		case "if", "range", "with":
@@ -133,7 +145,7 @@ func scanAction(text string, start int, left, right string) (action, bool) {
 
 	for p < len(text) {
 		if strings.HasPrefix(text[p:], right) {
-			a.span = textSpan{Off: start, Len: p + len(right) - start}
+			a.span = Span{Off: start, Len: p + len(right) - start}
 			return a, true
 		}
 		// A quoted argument may contain either delimiter, so step over
@@ -161,14 +173,14 @@ func scanComment(text string, start, p int, right string) (action, bool) {
 		return action{}, false
 	}
 	return action{
-		span:    textSpan{Off: start, Len: p + len(right) - start},
+		span:    Span{Off: start, Len: p + len(right) - start},
 		nameLit: invalidSpan,
 	}, true
 }
 
 // scanName reads the quoted template name beginning at p, returning the
 // name, the span of its literal, and the offset just past it.
-func scanName(text string, p int) (name string, lit textSpan, next int) {
+func scanName(text string, p int) (name string, lit Span, next int) {
 	quoted, err := strconv.QuotedPrefix(text[p:])
 	if err != nil {
 		return "", invalidSpan, p
@@ -177,7 +189,7 @@ func scanName(text string, p int) (name string, lit textSpan, next int) {
 	if err != nil {
 		return "", invalidSpan, p
 	}
-	return name, textSpan{Off: p, Len: len(quoted)}, p + len(quoted)
+	return name, Span{Off: p, Len: len(quoted)}, p + len(quoted)
 }
 
 // continuesIdentifier reports whether c can continue an identifier.

@@ -11,13 +11,13 @@ import (
 	"io"
 	"log"
 	"os"
-	"strconv"
 	"strings"
 	"text/template/parse"
 
 	"golang.org/x/tools/go/packages"
 
 	"github.com/typelate/check"
+	"github.com/typelate/check/internal/lex"
 )
 
 func main() {
@@ -89,7 +89,7 @@ func run(dir string, args []string, stdout, stderr io.Writer) int {
 			writeDefinition(def)
 		}, func(node *parse.TemplateNode, t *parse.Tree, tp types.Type, def check.Definition) {
 			loc, _ := t.ErrorContext(node)
-			writeCall(parseLocation(loc), t.Name, tp)
+			writeCall(lex.Position(loc), t.Name, tp)
 			writeDefinition(def)
 		}); err != nil {
 			writeCheckError(stderr, err)
@@ -263,25 +263,4 @@ func writeCallFunc(outputFormat string, stdout io.Writer) func(pos token.Positio
 			_, _ = fmt.Fprintf(stdout, "%s\t%q\t%s\n", pos, templateName, dataType)
 		}
 	}
-}
-
-// parseLocation parses a "filename:line:col" string into a token.Position.
-func parseLocation(loc string) token.Position {
-	// ErrorContext returns "filename:line:col" format.
-	// The filename may contain colons (e.g., Windows paths), so split from the right.
-	var pos token.Position
-	if i := strings.LastIndex(loc, ":"); i >= 0 {
-		// ErrorContext counts columns from zero; token.Position counts
-		// from one, so that a position reads the same as one taken from
-		// a Go file.
-		pos.Column, _ = strconv.Atoi(loc[i+1:])
-		pos.Column++
-		loc = loc[:i]
-	}
-	if i := strings.LastIndex(loc, ":"); i >= 0 {
-		pos.Line, _ = strconv.Atoi(loc[i+1:])
-		loc = loc[:i]
-	}
-	pos.Filename = loc
-	return pos
 }
