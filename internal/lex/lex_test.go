@@ -1,4 +1,4 @@
-package check
+package lex
 
 import (
 	"fmt"
@@ -8,23 +8,23 @@ import (
 
 // formatSpan renders the text a span covers along with its offset, so a
 // test table documents both what was matched and where.
-func formatSpan(text string, s textSpan) string {
+func formatSpan(text string, s Span) string {
 	if s.Off < 0 {
 		return "-"
 	}
 	return fmt.Sprintf("%q@%d", text[s.Off:s.Off+s.Len], s.Off)
 }
 
-func formatDefinition(text string, d definition) string {
+func formatDefinition(text string, d Clause) string {
 	return fmt.Sprintf("%q define=%s name=%s end=%s",
 		d.Name,
 		formatSpan(text, d.Define),
-		formatSpan(text, d.NameLit),
+		formatSpan(text, d.NameLiteral),
 		formatSpan(text, d.End),
 	)
 }
 
-func TestScanDefinitions(t *testing.T) {
+func TestDefinitions(t *testing.T) {
 	for _, tt := range []struct {
 		name        string
 		text        string
@@ -102,7 +102,7 @@ func TestScanDefinitions(t *testing.T) {
 			want: []string{`"a" define="{{define \"a\"}}"@0 name="\"a\""@9 end="{{end}}"@39`},
 		},
 		{
-			name: "a define inside a comment is not a definition",
+			name: "a define inside a comment is not a Clause",
 			text: `{{/* {{define "fake"}} */}}{{define "real"}}x{{end}}`,
 			want: []string{`"real" define="{{define \"real\"}}"@27 name="\"real\""@36 end="{{end}}"@45`},
 		},
@@ -117,7 +117,7 @@ func TestScanDefinitions(t *testing.T) {
 		},
 		{
 			// Same failure, seen from the other side: a define clause
-			// inside a trimmed comment must not become a definition.
+			// inside a trimmed comment must not become a Clause.
 			name: "a left trimmed comment hiding a define clause",
 			text: `{{define "a"}}{{- /* x}} {{define "fake"}}y{{end}} */ -}}b{{end}}`,
 			want: []string{`"a" define="{{define \"a\"}}"@0 name="\"a\""@9 end="{{end}}"@58`},
@@ -146,7 +146,7 @@ func TestScanDefinitions(t *testing.T) {
 			},
 		},
 		{
-			name: "a definition on the third line",
+			name: "a Clause on the third line",
 			text: "\n\n{{define `x`}}{{end}}",
 			want: []string{"\"x\" define=\"{{define `x`}}\"@2 name=\"`x`\"@11 end=\"{{end}}\"@16"},
 		},
@@ -162,14 +162,14 @@ func TestScanDefinitions(t *testing.T) {
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			got := scanDefinitions(tt.text, tt.left, tt.right)
+			got := Definitions(tt.text, tt.left, tt.right)
 
 			var formatted []string
 			for _, d := range got {
 				formatted = append(formatted, formatDefinition(tt.text, d))
 			}
 			if strings.Join(formatted, "\n") != strings.Join(tt.want, "\n") {
-				t.Errorf("scanDefinitions(%q, %q, %q) =\n\t%s\nwant\n\t%s",
+				t.Errorf("Definitions(%q, %q, %q) =\n\t%s\nwant\n\t%s",
 					tt.text, tt.left, tt.right,
 					strings.Join(formatted, "\n\t"), strings.Join(tt.want, "\n\t"))
 			}

@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"text/template/parse"
 	"unicode/utf8"
+
+	"github.com/typelate/check/internal/lex"
 )
 
 // Span is a byte range in a source file.
@@ -181,16 +183,16 @@ func definitions(src source, rootName, text, leftDelim, rightDelim string) []Def
 	trees := parseTrees(rootName, text, leftDelim, rightDelim)
 	defs := []Definition{{
 		Name:   rootName,
-		Define: src.span(textSpan{Off: 0}),
-		End:    src.span(textSpan{Off: len(text)}),
+		Define: src.span(lex.Span{Off: 0}),
+		End:    src.span(lex.Span{Off: len(text)}),
 		Tree:   trees[rootName],
 	}}
-	for _, d := range scanDefinitions(text, leftDelim, rightDelim) {
+	for _, d := range lex.Definitions(text, leftDelim, rightDelim) {
 		defs = append(defs, Definition{
 			Name:         d.Name,
 			Define:       src.span(d.Define),
 			End:          src.span(d.End),
-			TemplateName: src.span(d.NameLit),
+			TemplateName: src.span(d.NameLiteral),
 			Tree:         trees[d.Name],
 		})
 	}
@@ -236,7 +238,7 @@ type source struct {
 
 // span resolves a range of template text. A range that cannot be located
 // resolves to the zero Span, which reports itself invalid.
-func (s source) span(t textSpan) Span {
+func (s source) span(t lex.Span) Span {
 	start, ok := s.offset(t.Off)
 	if !ok {
 		return Span{}
