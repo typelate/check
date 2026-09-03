@@ -1,0 +1,32 @@
+# A template written as a Go string literal reports where it sits in the
+# Go file that holds it, so the position addresses real bytes there and
+# not an offset inside the template text.
+
+check-templates -definitions
+stdout 'main\.go:9:58\+21\t"greeting"\t.*main\.go:9:81\+7\t.*main\.go:9:67\+10'
+! stderr .
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- main.go --
+package main
+
+import (
+	"fmt"
+	"html/template"
+	"net/http"
+)
+
+var templates = template.Must(template.New("app").Parse(`{{define "greeting"}}Hi{{end}}`))
+
+type Page struct {
+	Title string
+}
+
+func handleIndex(w http.ResponseWriter, r *http.Request) {
+	_ = templates.ExecuteTemplate(w, "greeting", Page{Title: "Home"})
+}
+
+var _ = fmt.Sprint

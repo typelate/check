@@ -1,0 +1,58 @@
+# The -definitions flag reports where each checked template was defined:
+# the define clause, the template name, the matching end clause, and the
+# quoted name literal inside the clause.
+#
+# "greeting" is reached through an ExecuteTemplate call and "name"
+# through a {{template}} node, so both inspectors are exercised.
+
+check-templates -definitions
+stdout 'index\.gohtml:1:1\+21\t"greeting"\t.*index\.gohtml:1:46\+7\t.*index\.gohtml:1:10\+10'
+stdout 'index\.gohtml:2:1\+17\t"name"\t.*index\.gohtml:2:28\+7\t.*index\.gohtml:2:10\+6'
+! stderr .
+
+check-templates -definitions -o jsonl
+stdout '"template_name":"greeting"'
+stdout '"define":\{"filename":".*index\.gohtml","line":1,"column":1,"offset":0,"length":21\}'
+stdout '"end":\{"filename":".*index\.gohtml","line":1,"column":46,"offset":45,"length":7\}'
+stdout '"name":\{"filename":".*index\.gohtml","line":1,"column":10,"offset":9,"length":10\}'
+! stderr .
+
+# Without the flag nothing is written.
+check-templates
+! stdout .
+! stderr .
+
+-- go.mod --
+module example.com/app
+
+go 1.25.0
+-- main.go --
+package main
+
+import (
+	"embed"
+	"fmt"
+	"html/template"
+	"net/http"
+)
+
+var (
+	//go:embed *.gohtml
+	source embed.FS
+
+	templates = template.Must(template.ParseFS(source, "*"))
+)
+
+type Page struct {
+	Title string
+}
+
+func handleIndex(w http.ResponseWriter, r *http.Request) {
+	_ = templates.ExecuteTemplate(w, "greeting", Page{Title: "Home"})
+}
+
+var _ = fmt.Sprint
+
+-- index.gohtml --
+{{define "greeting"}}Hi {{template "name" .}}{{end}}
+{{define "name"}}{{.Title}}{{end}}
