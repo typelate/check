@@ -301,5 +301,12 @@ func packageDirectory(pkg *packages.Package) string {
 	if len(pkg.GoFiles) > 0 {
 		return filepath.Dir(pkg.GoFiles[0])
 	}
+	// A package loaded without NeedFiles still positions its syntax in the
+	// file set.
+	if len(pkg.Syntax) > 0 && pkg.Fset != nil {
+		if pos := pkg.Fset.Position(pkg.Syntax[0].Pos()); pos.Filename != "" {
+			return filepath.Dir(pos.Filename)
+		}
+	}
 	return "."
 }
