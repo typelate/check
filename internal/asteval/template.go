@@ -8,6 +8,7 @@ import (
 	"go/token"
 	"go/types"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -514,22 +515,52 @@ func embeddedFilesMatchingTemplateNameList(dir string, set *token.FileSet, comme
 	var matches []string
 	for _, fp := range embeddedFiles {
 		for _, pattern := range templateNames {
-			pat := filepath.FromSlash(pattern)
-			if !strings.ContainsAny(pat, "*[]") {
-				prefix := filepath.FromSlash(pat + "/")
-				if strings.HasPrefix(fp, prefix) {
-					matches = append(matches, fp)
-					continue
-				}
-			}
-			if matched, err := filepath.Match(pat, fp); err != nil {
+			matched, err := embedPatternMatches(pattern, filepath.ToSlash(fp))
+			if err != nil {
 				return nil, wrapWithFilename(dir, set, comment.Pos(), fmt.Errorf("embed comment malformed: %w", err))
-			} else if matched {
+			}
+			if matched {
 				matches = append(matches, fp)
+				break
 			}
 		}
 	}
 	return slices.Clip(matches), nil
+}
+
+// embedPatternMatches reports whether a go:embed pattern matches the
+// slash-separated file path fp using cmd/go semantics: a pattern that
+// matches a directory embeds the directory's whole subtree, excluding
+// paths with an element that begins with "." or "_" unless the pattern
+// has the all: prefix. pkg.EmbedFiles holds the union of every embed
+// directive in the package, so a variable's patterns must re-apply the
+// exclusion to avoid claiming files another directive embedded.
+func embedPatternMatches(pattern, fp string) (bool, error) {
+	pat, all := strings.CutPrefix(pattern, "all:")
+	if matched, err := path.Match(pat, fp); err != nil || matched {
+		return matched, err
+	}
+	// path.Match patterns match a fixed number of path elements,
+	// so at most one ancestor directory of fp can match pat.
+	for parent := path.Dir(fp); parent != "." && parent != "/"; parent = path.Dir(parent) {
+		matched, err := path.Match(pat, parent)
+		if err != nil {
+			return false, err
+		}
+		if !matched {
+			continue
+		}
+		if all {
+			return true, nil
+		}
+		for elem := range strings.SplitSeq(strings.TrimPrefix(fp, parent+"/"), "/") {
+			if strings.HasPrefix(elem, ".") || strings.HasPrefix(elem, "_") {
+				return false, nil
+			}
+		}
+		return true, nil
+	}
+	return false, nil
 }
 
 const goEmbedCommentPrefix = "//go:embed"
