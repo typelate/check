@@ -8,6 +8,7 @@ import (
 	"go/types"
 	htmltemplate "html/template"
 	"io"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -186,4 +187,63 @@ var templates = template.New("x")
 	}, "templates")
 	require.ErrorContains(t, err, "loaded without type information",
 		"a silently empty result would be undiagnosable")
+}
+
+func TestAsHTML(t *testing.T) {
+	testPkg := find(t, loadTestPkg(), func(p *packages.Package) bool {
+		return p.Name == packageName
+	})
+
+	t.Run("html variable returns the concrete set", func(t *testing.T) {
+		lt, err := check.LoadTemplates(testPkg, "loadHTMLTemplates")
+		require.NoError(t, err)
+		ts, err := lt.AsHTML()
+		require.NoError(t, err)
+		concrete, ok := lt.HTML()
+		require.True(t, ok)
+		assert.Same(t, concrete, ts)
+	})
+
+	t.Run("text variable adopts the trees", func(t *testing.T) {
+		lt, err := check.LoadTemplates(testPkg, "loadTextTemplates")
+		require.NoError(t, err)
+		ts, err := lt.AsHTML()
+		require.NoError(t, err)
+		require.NotNil(t, ts.Lookup("note"))
+	})
+}
+
+func TestNewForrest(t *testing.T) {
+	forrest := check.NewForrest(loadHTMLTemplates)
+
+	tree, ok := forrest.FindTree("greeting")
+	require.True(t, ok)
+	assert.NotNil(t, tree)
+
+	_, ok = forrest.FindTree("no-such-template")
+	assert.False(t, ok)
+}
+
+func TestFindPackage(t *testing.T) {
+	list := loadTestPkg()
+	testPkg := find(t, list, func(p *packages.Package) bool { return p.Name == packageName })
+	dir := filepath.Dir(testPkg.GoFiles[0])
+
+	pkg, ok := check.FindPackage(list, dir)
+	require.True(t, ok)
+	assert.NotEmpty(t, pkg.GoFiles)
+	assert.Equal(t, dir, filepath.Dir(pkg.GoFiles[0]))
+
+	pkg, ok = check.FindPackage(list, testPkg.GoFiles[0])
+	require.True(t, ok, "a .go file names its directory")
+
+	_, ok = check.FindPackage(list, filepath.Join(dir, "no-such-dir"))
+	assert.False(t, ok)
+
+	byPath, ok := check.FindPackageByPath(list, pkg.PkgPath)
+	require.True(t, ok)
+	assert.Equal(t, pkg.PkgPath, byPath.PkgPath)
+
+	_, ok = check.FindPackageByPath(list, "example.com/no-such-package")
+	assert.False(t, ok)
 }

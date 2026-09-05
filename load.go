@@ -98,6 +98,31 @@ func (t *Templates) Text() (*texttemplate.Template, bool) {
 	return asteval.TextTemplate(t.templates)
 }
 
+// AsHTML returns an html/template set carrying the loaded trees: the
+// concrete value when the variable holds an html/template set, otherwise
+// a new set adopting the text set's trees. Escaping applies only on
+// execution, so a caller that introspects names and trees sees the same
+// set either way.
+func (t *Templates) AsHTML() (*htmltemplate.Template, error) {
+	if ts, ok := t.HTML(); ok {
+		return ts, nil
+	}
+	textTemplates, ok := t.Text()
+	if !ok {
+		return nil, fmt.Errorf("the variable does not hold a template set")
+	}
+	ts := htmltemplate.New(textTemplates.Name())
+	for _, tmpl := range textTemplates.Templates() {
+		if tmpl.Tree == nil {
+			continue
+		}
+		if _, err := ts.AddParseTree(tmpl.Name(), tmpl.Tree); err != nil {
+			return nil, fmt.Errorf("adopting text/template %q: %w", tmpl.Name(), err)
+		}
+	}
+	return ts, nil
+}
+
 // FindTree implements TreeFinder over the evaluated template set.
 func (t *Templates) FindTree(name string) (*parse.Tree, bool) {
 	return t.templates.FindTree(name)
