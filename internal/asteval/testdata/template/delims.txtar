@@ -1,6 +1,11 @@
 -- templates.go --
 package main
 
+import (
+	"embed"
+	"html/template"
+)
+
 var (
 	//go:embed *.gohtml
 	files embed.FS
