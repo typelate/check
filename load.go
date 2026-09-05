@@ -2,7 +2,10 @@ package check
 
 import (
 	"fmt"
+	"go/ast"
+	"go/types"
 	htmltemplate "html/template"
+	"iter"
 	texttemplate "text/template"
 	"text/template/parse"
 
@@ -31,6 +34,7 @@ func LoadTemplates(pkg *packages.Package, templatesVariable string) (*Templates,
 			if ident.Name != templatesVariable || i >= len(tv.Values) {
 				continue
 			}
+			variable := pkg.TypesInfo.Defs[ident]
 			functions := asteval.DefaultFunctions(pkg.Types)
 			defaults := make(Functions, len(functions))
 			for name, sig := range functions {
@@ -52,6 +56,8 @@ func LoadTemplates(pkg *packages.Package, templatesVariable string) (*Templates,
 				functions:   Functions(functions),
 				collected:   collected,
 				definitions: newDefinitionSet(definitionsFor(pkg.Fset, meta.Sources)),
+				pkg:         pkg,
+				variable:    variable,
 			}
 			result.definitions.adoptTrees(result)
 			return result, nil
@@ -68,6 +74,8 @@ type Templates struct {
 	functions   Functions
 	collected   Functions
 	definitions definitionSet
+	pkg         *packages.Package
+	variable    types.Object
 }
 
 // HTML returns the html/template value the variable holds; ok is false
@@ -103,4 +111,73 @@ func (t *Templates) Functions() Functions {
 // in the construction chain, without the defaults.
 func (t *Templates) CollectedFunctions() Functions {
 	return t.collected
+}
+
+// ExecuteTemplateCall is one templatesVariable.ExecuteTemplate(wr, name,
+// data) call found in the loaded package.
+type ExecuteTemplateCall struct {
+	// Call is the ExecuteTemplate call expression.
+	Call *ast.CallExpr
+
+	// TemplateName is the call's template name string literal.
+	TemplateName string
+
+	// DataType is the data argument's type.
+	DataType types.Type
+
+	// Definition locates where the named template was defined. It is the
+	// zero Definition when the template set does not know the name; use
+	// Definition.Define.IsValid to tell.
+	Definition Definition
+}
+
+// ExecuteTemplateCalls reports, in file order, each ExecuteTemplate call
+// in the loaded package whose receiver resolves to the loaded template
+// variable — resolution is by object, so a shadowed or renamed
+// identifier does not match — and whose template name is a string
+// literal.
+func (t *Templates) ExecuteTemplateCalls() iter.Seq[ExecuteTemplateCall] {
+	return func(yield func(ExecuteTemplateCall) bool) {
+		if t.pkg == nil || t.variable == nil {
+			return
+		}
+		for _, file := range t.pkg.Syntax {
+			keepWalking := true
+			ast.Inspect(file, func(node ast.Node) bool {
+				if !keepWalking {
+					return false
+				}
+				call, ok := node.(*ast.CallExpr)
+				if !ok || len(call.Args) != 3 {
+					return true
+				}
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok || sel.Sel.Name != "ExecuteTemplate" {
+					return true
+				}
+				if !asteval.IsTemplateMethod(t.pkg.TypesInfo, sel) {
+					return true
+				}
+				receiverIdent, ok := sel.X.(*ast.Ident)
+				if !ok || t.pkg.TypesInfo.Uses[receiverIdent] != t.variable {
+					return true
+				}
+				templateName, ok := asteval.BasicLiteralString(call.Args[1])
+				if !ok {
+					return true
+				}
+				def, _ := t.definitions.FindDefinition(templateName)
+				keepWalking = yield(ExecuteTemplateCall{
+					Call:         call,
+					TemplateName: templateName,
+					DataType:     t.pkg.TypesInfo.TypeOf(call.Args[2]),
+					Definition:   def,
+				})
+				return keepWalking
+			})
+			if !keepWalking {
+				return
+			}
+		}
+	}
 }

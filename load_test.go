@@ -2,7 +2,9 @@ package check_test
 
 import (
 	"embed"
+	"go/types"
 	htmltemplate "html/template"
+	"io"
 	"strings"
 	"sync"
 	"testing"
@@ -126,4 +128,40 @@ func TestCollectedFunctions(t *testing.T) {
 
 	_, ok = lt.Functions()["printf"]
 	assert.True(t, ok, "the full set keeps the defaults")
+}
+
+// renderGreeting is discovered by ExecuteTemplateCalls through the
+// loadHTMLTemplates variable object.
+func renderGreeting(w io.Writer) error {
+	return loadHTMLTemplates.ExecuteTemplate(w, "greeting", struct{ Name string }{Name: "test"})
+}
+
+// renderShadowed must not be discovered: the identifier shares the
+// variable's name but resolves to a different object.
+func renderShadowed(w io.Writer) error {
+	loadHTMLTemplates := htmltemplate.Must(htmltemplate.New("shadow").Parse(`{{define "greeting"}}shadow{{end}}`))
+	return loadHTMLTemplates.ExecuteTemplate(w, "greeting", 1)
+}
+
+func TestExecuteTemplateCalls(t *testing.T) {
+	testPkg := find(t, loadTestPkg(), func(p *packages.Package) bool {
+		return p.Name == packageName
+	})
+	lt, err := check.LoadTemplates(testPkg, "loadHTMLTemplates")
+	require.NoError(t, err)
+
+	require.NoError(t, renderGreeting(io.Discard))
+	require.NoError(t, renderShadowed(io.Discard))
+
+	var calls []check.ExecuteTemplateCall
+	for call := range lt.ExecuteTemplateCalls() {
+		calls = append(calls, call)
+	}
+	require.Len(t, calls, 1, "the shadowed identifier resolves to a different object and is not reported")
+
+	call := calls[0]
+	assert.Equal(t, "greeting", call.TemplateName)
+	assert.Equal(t, "struct{Name string}", types.TypeString(call.DataType, nil))
+	require.True(t, call.Definition.Define.IsValid(), "the named template's definition rides along")
+	assert.Equal(t, "greeting", call.Definition.Name)
 }
