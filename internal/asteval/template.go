@@ -122,7 +122,8 @@ func EvaluateTemplateSelector(ts Template, pkg *types.Package, typesInfo *types.
 				if err != nil {
 					return nil, lDelim, rDelim, err
 				}
-				return ts.Option(list...), lDelim, rDelim, nil
+				t, err := setOption(workingDirectory, fileSet, call.Lparen, ts, list)
+				return t, lDelim, rDelim, err
 			case "Delims":
 				if len(call.Args) != 2 {
 					return nil, lDelim, rDelim, wrapWithFilename(workingDirectory, fileSet, call.Lparen, fmt.Errorf("expected exactly two string literal arguments"))
@@ -215,7 +216,8 @@ func EvaluateTemplateSelector(ts Template, pkg *types.Package, typesInfo *types.
 			if err != nil {
 				return nil, upLDelim, upRDelim, err
 			}
-			return up.Option(list...), upLDelim, upRDelim, nil
+			t, err := setOption(workingDirectory, fileSet, call.Lparen, up, list)
+			return t, upLDelim, upRDelim, err
 		case "Funcs":
 			if err := evaluateFuncMap(workingDirectory, typesInfo, pkg, fileSet, call, fm, funcTypeMaps); err != nil {
 				return nil, upLDelim, upRDelim, err
@@ -416,6 +418,11 @@ func evaluateFuncMap(workingDirectory string, typesInfo *types.Info, pkg *types.
 			if path != "html/template" && path != "text/template" {
 				return wrapWithFilename(workingDirectory, fileSet, arg.Pos(), fmt.Errorf("expected template.FuncMap got %s", litType))
 			}
+		} else if !isTemplateFuncMapLiteral(typesInfo, lit) {
+			// The literal's type did not resolve — the package may not
+			// fully type check — so validate the spelling instead of
+			// silently skipping the function registrations.
+			return wrapWithFilename(workingDirectory, fileSet, arg.Pos(), fmt.Errorf("expected a template.FuncMap composite literal got %s", astgen.Format(lit)))
 		}
 	}
 	var buf bytes.Buffer
@@ -526,6 +533,28 @@ func embeddedFilesMatchingTemplateNameList(dir string, set *token.FileSet, comme
 		}
 	}
 	return slices.Clip(matches), nil
+}
+
+// isTemplateFuncMapLiteral reports whether lit is spelled as a FuncMap
+// composite literal of the template package.
+func isTemplateFuncMapLiteral(typesInfo *types.Info, lit *ast.CompositeLit) bool {
+	sel, ok := lit.Type.(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != "FuncMap" {
+		return false
+	}
+	x, ok := sel.X.(*ast.Ident)
+	return ok && IsTemplatePkgIdent(typesInfo, x)
+}
+
+// setOption applies Option values, converting the panic text/template and
+// html/template raise for an unrecognized option into a positioned error.
+func setOption(workingDirectory string, fileSet *token.FileSet, pos token.Pos, ts Template, opts []string) (_ Template, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = wrapWithFilename(workingDirectory, fileSet, pos, fmt.Errorf("%v", r))
+		}
+	}()
+	return ts.Option(opts...), nil
 }
 
 // embedPatternMatches reports whether a go:embed pattern matches the
