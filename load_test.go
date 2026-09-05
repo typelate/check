@@ -2,6 +2,9 @@ package check_test
 
 import (
 	"embed"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"go/types"
 	htmltemplate "html/template"
 	"io"
@@ -164,4 +167,23 @@ func TestExecuteTemplateCalls(t *testing.T) {
 	assert.Equal(t, "struct{Name string}", types.TypeString(call.DataType, nil))
 	require.True(t, call.Definition.Define.IsValid(), "the named template's definition rides along")
 	assert.Equal(t, "greeting", call.Definition.Name)
+}
+
+func TestLoadTemplatesWithoutTypeInfo(t *testing.T) {
+	fileSet := token.NewFileSet()
+	file, err := parser.ParseFile(fileSet, "templates.go", `package x
+
+import "html/template"
+
+var templates = template.New("x")
+`, parser.SkipObjectResolution)
+	require.NoError(t, err)
+
+	_, err = check.LoadTemplates(&packages.Package{
+		PkgPath: "example.com/x",
+		Fset:    fileSet,
+		Syntax:  []*ast.File{file},
+	}, "templates")
+	require.ErrorContains(t, err, "loaded without type information",
+		"a silently empty result would be undiagnosable")
 }
