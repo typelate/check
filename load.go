@@ -24,6 +24,9 @@ import (
 // files (packages.NeedSyntax, NeedTypes, NeedTypesInfo, and
 // NeedEmbedFiles).
 func LoadTemplates(pkg *packages.Package, templatesVariable string) (*Templates, error) {
+	if pkg.TypesInfo == nil || pkg.Types == nil {
+		return nil, fmt.Errorf("package %s was loaded without type information; load it with packages.NeedTypes and packages.NeedTypesInfo", pkg.PkgPath)
+	}
 	workingDirectory := packageDirectory(pkg)
 	embeddedPaths, err := asteval.RelativeFilePaths(workingDirectory, pkg.EmbedFiles...)
 	if err != nil {
@@ -35,6 +38,11 @@ func LoadTemplates(pkg *packages.Package, templatesVariable string) (*Templates,
 				continue
 			}
 			variable := pkg.TypesInfo.Defs[ident]
+			if variable == nil {
+				// A silently empty ExecuteTemplateCalls would be
+				// undiagnosable; the object must resolve.
+				return nil, fmt.Errorf("variable %s in package %s has no type object; the package was loaded without type information", templatesVariable, pkg.PkgPath)
+			}
 			functions := asteval.DefaultFunctions(pkg.Types)
 			defaults := make(Functions, len(functions))
 			for name, sig := range functions {
