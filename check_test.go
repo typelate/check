@@ -99,6 +99,20 @@ func TestTree(t *testing.T) {
 			},
 		},
 		{
+			Name:     "a method that takes an argument is called with none in the middle of a chain",
+			Template: `{{.Get.Field}}`,
+			Data:     MethodsInChain{},
+			Error: func(t *testing.T, checkErr, execErr error, tp types.Type) {
+				require.ErrorContains(t, checkErr, "wrong number of args expected 1 but got 0")
+				require.ErrorContains(t, execErr, "wrong number of args for Get: want 1 got 0")
+			},
+		},
+		{
+			Name:     "a variadic method needs no argument in the middle of a chain",
+			Template: `{{.Variadic.Field}}`,
+			Data:     MethodsInChain{},
+		},
+		{
 			Name:     "not found shows available field",
 			Template: `{{.Missing}}`,
 			Data:     StructWithField{},
