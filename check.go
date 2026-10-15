@@ -955,6 +955,11 @@ func (s *scope) checkIdentifiers(tree *parse.Tree, dot types.Type, n parse.Node,
 					}
 					return res, nil
 				}
+				// Before the end of a chain, text/template calls a
+				// method with no arguments.
+				if _, err := checkCallArguments(s.global, ident, sig, nil); err != nil {
+					return nil, wrapError(ErrorTypeCallArguments, tree, n, err)
+				}
 				x = sig.Results().At(0).Type()
 			}
 			if _, ok := x.(*types.Signature); ok && i < len(idents)-1 {
