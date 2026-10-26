@@ -498,15 +498,22 @@ type TypeNodeMapping map[types.Type][]parse.Node
 // classification, the parse.Tree and parse.Node it was found at, and, when
 // relevant, the types.Type being checked.
 func Execute(global *Global, tree *parse.Tree, data types.Type) error {
-	s := &scope{
-		global: global,
-		variables: map[string]types.Type{
-			"$": data,
-		},
-		invocations: []templateInvocation{{name: tree.Name, dot: data}},
-	}
+	s := newTemplateScope(global, tree, data, nil)
 	_, err := s.walk(tree, data, nil, tree.Root)
 	return err
+}
+
+// newTemplateScope returns the scope for walking tree's body with dot,
+// invoked from within the templates in parent.
+func newTemplateScope(global *Global, tree *parse.Tree, dot types.Type, parent []templateInvocation) *scope {
+	return &scope{
+		global: global,
+		variables: map[string]types.Type{
+			"$": dot,
+		},
+		// Clip so sibling invocations never share a backing array.
+		invocations: append(slices.Clip(parent), templateInvocation{tree: tree, dot: dot}),
+	}
 }
 
 type scope struct {
@@ -518,15 +525,17 @@ type scope struct {
 	// independent failures.
 	failed map[string]bool
 
-	// invocations are the templates being checked, outermost first, each
-	// with the dot it was invoked with. A template invoked again with an
+	// invocations are the template trees being checked, outermost first,
+	// each with the dot it was invoked with. A tree invoked again with an
 	// identical dot is already being checked further up, so walking it
 	// again would only repeat its errors, or never end when it recurses.
+	// Trees are compared by identity, not name, so a root tree whose name
+	// resolves to a different body does not hide that body.
 	invocations []templateInvocation
 }
 
 type templateInvocation struct {
-	name string
+	tree *parse.Tree
 	dot  types.Type
 }
 
@@ -539,11 +548,11 @@ func (s *scope) child() *scope {
 	}
 }
 
-// invoking reports whether the template name is already being checked
-// with an identical dot.
-func (s *scope) invoking(name string, dot types.Type) bool {
+// invoking reports whether tree is already being checked with an
+// identical dot.
+func (s *scope) invoking(tree *parse.Tree, dot types.Type) bool {
 	return slices.ContainsFunc(s.invocations, func(inv templateInvocation) bool {
-		return inv.name == name && types.Identical(inv.dot, dot)
+		return inv.tree == tree && types.Identical(inv.dot, dot)
 	})
 }
 
@@ -762,15 +771,8 @@ func (s *scope) checkTemplateNode(tree *parse.Tree, dot types.Type, n *parse.Tem
 		errs = append(errs, notFound)
 		return joinErrors(tree, n, errs...)
 	}
-	if pipeOK && !s.invoking(n.Name, x) {
-		childScope := scope{
-			global: s.global,
-			variables: map[string]types.Type{
-				"$": x,
-			},
-			// Clip so sibling invocations never share a backing array.
-			invocations: append(slices.Clip(s.invocations), templateInvocation{name: n.Name, dot: x}),
-		}
+	if pipeOK && !s.invoking(childTree, x) {
+		childScope := newTemplateScope(s.global, childTree, x, s.invocations)
 		if _, err := childScope.walk(childTree, x, nil, childTree.Root); err != nil {
 			errs = append(errs, err)
 		}

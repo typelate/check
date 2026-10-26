@@ -14,6 +14,7 @@ import (
 
 // recursionNode is the dot for templates that render a tree by invoking
 // themselves on each child.
+//
 //lint:ignore U1000 it is used in a template
 type recursionNode struct {
 	Name     string
@@ -22,6 +23,7 @@ type recursionNode struct {
 
 // recursionOuter and recursionInner alternate as a template descends, so a
 // template invoking itself on .Child sees a different dot on each level.
+//
 //lint:ignore U1000 it is used in a template
 type recursionOuter struct {
 	Name  string
@@ -40,7 +42,7 @@ func TestExecute_recursiveTemplate(t *testing.T) {
 	testPkg := find(t, loadPkg(), func(p *packages.Package) bool {
 		return p.Name == packageName
 	})
-	lookup := func(name string) types.Type {
+	lookup := func(t *testing.T, name string) types.Type {
 		t.Helper()
 		obj := testPkg.Types.Scope().Lookup(name)
 		if obj == nil {
@@ -95,7 +97,7 @@ func TestExecute_recursiveTemplate(t *testing.T) {
 			})
 			global := check.NewGlobal(testPkg.Types, testPkg.Fset, trees, check.DefaultFunctions(testPkg.Types))
 
-			err := check.Execute(global, ts.Lookup(tt.template).Tree, lookup(tt.dot))
+			err := check.Execute(global, ts.Lookup(tt.template).Tree, lookup(t, tt.dot))
 
 			if len(tt.wantErr) == 0 {
 				if err != nil {
@@ -112,5 +114,31 @@ func TestExecute_recursiveTemplate(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestExecute_rootTreeNotServedByName checks that a root tree is not
+// mistaken for the template its name resolves to: when the tree finder
+// serves a different body under that name, invoking the name must still
+// check the served body.
+func TestExecute_rootTreeNotServedByName(t *testing.T) {
+	testPkg := find(t, loadPkg(), func(p *packages.Package) bool {
+		return p.Name == packageName
+	})
+	root := template.Must(template.New("node").Parse(`{{range .Children}}{{template "node" .}}{{end}}`))
+	served := template.Must(template.New("node").Parse(`{{.Missing}}`))
+	trees := check.FindTreeFunc(func(name string) (*parse.Tree, bool) {
+		if named := served.Lookup(name); named != nil {
+			return named.Tree, true
+		}
+		return nil, false
+	})
+	global := check.NewGlobal(testPkg.Types, testPkg.Fset, trees, check.DefaultFunctions(testPkg.Types))
+	dot := testPkg.Types.Scope().Lookup("recursionNode").Type()
+
+	err := check.Execute(global, root.Tree, dot)
+
+	if err == nil || !strings.Contains(err.Error(), "Missing not found") {
+		t.Fatalf("Execute(root) = %v, want an error containing %q from the served node body", err, "Missing not found")
 	}
 }
