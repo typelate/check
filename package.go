@@ -251,14 +251,9 @@ func resolveTemplates(pkg *packages.Package, receivers map[types.Object]struct{}
 // checkCalls type-checks each pending ExecuteTemplate call against its
 // resolved template.
 func checkCalls(pkg *packages.Package, pending []pendingCall, resolved map[types.Object]*resolvedTemplate, inspectCall ExecuteTemplateNodeInspectorFunc, inspectTemplate TemplateNodeInspectorFunc) error {
-	mergedFunctions := make(Functions)
-	if pkg.Types != nil {
-		mergedFunctions = DefaultFunctions(pkg.Types)
-	}
+	mergedFunctions := DefaultFunctions(pkg.Types)
 	for _, rt := range resolved {
-		for name, sig := range rt.functions {
-			mergedFunctions[name] = sig
-		}
+		mergedFunctions = mergedFunctions.Add(Functions(rt.functions))
 		rt.definitions = newDefinitionSet(definitionsFor(pkg.Fset, rt.metadata.Sources))
 		rt.definitions.adoptTrees(rt.templates)
 	}
