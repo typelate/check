@@ -7,6 +7,7 @@ import (
 	"go/token"
 	"go/types"
 	"maps"
+	"slices"
 	"strconv"
 	"strings"
 	"text/template/parse"
@@ -502,6 +503,7 @@ func Execute(global *Global, tree *parse.Tree, data types.Type) error {
 		variables: map[string]types.Type{
 			"$": data,
 		},
+		invocations: []templateInvocation{{name: tree.Name, dot: data}},
 	}
 	_, err := s.walk(tree, data, nil, tree.Root)
 	return err
@@ -515,14 +517,34 @@ type scope struct {
 	// so later lookups can be marked Secondary instead of reported as
 	// independent failures.
 	failed map[string]bool
+
+	// invocations are the templates being checked, outermost first, each
+	// with the dot it was invoked with. A template invoked again with an
+	// identical dot is already being checked further up, so walking it
+	// again would only repeat its errors, or never end when it recurses.
+	invocations []templateInvocation
+}
+
+type templateInvocation struct {
+	name string
+	dot  types.Type
 }
 
 func (s *scope) child() *scope {
 	return &scope{
-		global:    s.global,
-		variables: maps.Clone(s.variables),
-		failed:    maps.Clone(s.failed),
+		global:      s.global,
+		variables:   maps.Clone(s.variables),
+		failed:      maps.Clone(s.failed),
+		invocations: s.invocations,
 	}
+}
+
+// invoking reports whether the template name is already being checked
+// with an identical dot.
+func (s *scope) invoking(name string, dot types.Type) bool {
+	return slices.ContainsFunc(s.invocations, func(inv templateInvocation) bool {
+		return inv.name == name && types.Identical(inv.dot, dot)
+	})
 }
 
 // markFailedDecls records the variables a failing pipeline would have
@@ -740,12 +762,14 @@ func (s *scope) checkTemplateNode(tree *parse.Tree, dot types.Type, n *parse.Tem
 		errs = append(errs, notFound)
 		return joinErrors(tree, n, errs...)
 	}
-	if pipeOK {
+	if pipeOK && !s.invoking(n.Name, x) {
 		childScope := scope{
 			global: s.global,
 			variables: map[string]types.Type{
 				"$": x,
 			},
+			// Clip so sibling invocations never share a backing array.
+			invocations: append(slices.Clip(s.invocations), templateInvocation{name: n.Name, dot: x}),
 		}
 		if _, err := childScope.walk(childTree, x, nil, childTree.Root); err != nil {
 			errs = append(errs, err)

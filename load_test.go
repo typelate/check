@@ -27,6 +27,9 @@ var loadHTMLTemplates = htmltemplate.Must(htmltemplate.New("load").Funcs(htmltem
 	"upper": strings.ToUpper,
 }).ParseFS(loadFS, "testdata/load/*.gohtml"))
 
+//lint:ignore U1000 it is loaded from source by check.LoadTemplates
+var loadEscaperTemplates = htmltemplate.Must(htmltemplate.New("escapers").Parse(`{{define "link"}}<a href="/search?q={{urlquery .Query}}" onclick="{{js .Query}}">{{html .Query}}</a>{{end}}`))
+
 var loadTextTemplates = texttemplate.Must(texttemplate.New("plain").Parse(`{{define "note"}}{{.Body}}{{end}}`))
 
 var loadTestPkg = sync.OnceValue(func() []*packages.Package {
@@ -131,6 +134,26 @@ func TestCollectedFunctions(t *testing.T) {
 
 	_, ok = lt.Functions()["printf"]
 	assert.True(t, ok, "the full set keeps the defaults")
+}
+
+// TestLoadTemplates_escaperFunctions checks that the escaper built-ins
+// (urlquery, js, html) are in the loaded function set, so a Global built
+// from it does not report them as unknown functions.
+func TestLoadTemplates_escaperFunctions(t *testing.T) {
+	testPkg := find(t, loadTestPkg(), func(p *packages.Package) bool {
+		return p.Name == packageName
+	})
+	lt, err := check.LoadTemplates(testPkg, "loadEscaperTemplates")
+	require.NoError(t, err)
+
+	tree, ok := lt.FindTree("link")
+	require.True(t, ok)
+	global := check.NewGlobal(testPkg.Types, testPkg.Fset, lt, lt.Functions())
+	data := types.NewStruct([]*types.Var{
+		types.NewField(0, testPkg.Types, "Query", types.Typ[types.String], false),
+	}, nil)
+
+	require.NoError(t, check.Execute(global, tree, data))
 }
 
 // renderGreeting is discovered by ExecuteTemplateCalls through the

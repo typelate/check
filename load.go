@@ -59,9 +59,12 @@ func LoadTemplates(pkg *packages.Package, templatesVariable string) (*Templates,
 					collected[name] = sig
 				}
 			}
+			// asteval's defaults lack the escaper built-ins (urlquery,
+			// js, html), so layer the evaluated functions over check's.
+			all := DefaultFunctions(pkg.Types).Add(Functions(functions))
 			result := &Templates{
 				templates:   ts,
-				functions:   Functions(functions),
+				functions:   all,
 				collected:   collected,
 				definitions: newDefinitionSet(definitionsFor(pkg.Fset, meta.Sources)),
 				pkg:         pkg,
